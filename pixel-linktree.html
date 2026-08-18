@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>dein.name</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body{
+    margin:0; padding:0; height:100%;
+    background:#fff;
+    display:flex; align-items:center; justify-content:center;
+    overflow:hidden;
+    font-family:'Press Start 2P', monospace;
+    touch-action: none;
+  }
+  #stage{ position:relative; }
+  canvas{
+    display:block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border:4px solid #000;
+  }
+  #hint{
+    position:absolute; top:-2.4rem; left:0; right:0;
+    text-align:center; font-size:0.5rem; color:#000;
+  }
+  #loading{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:#fff; font-size:0.6rem; color:#000; z-index:5;
+  }
+
+  #controls{
+    display:none;
+    position:fixed; left:0; right:0; bottom:0;
+    justify-content:space-between; align-items:flex-end;
+    padding: 0 20px 20px;
+    pointer-events:none;
+    z-index:10;
+  }
+  @media (max-width:800px), (pointer:coarse){
+    #controls{ display:flex; }
+  }
+  .pad{
+    display:grid;
+    grid-template-columns: 46px 46px 46px;
+    grid-template-rows: 46px 46px 46px;
+    gap:2px;
+    pointer-events:auto;
+  }
+  .pad button{
+    background:rgba(255,255,255,0.9); border:2px solid #000; color:#000;
+    font-size:1rem; touch-action:none; user-select:none;
+  }
+  .pad button:active{ background:#000; color:#fff; }
+  #dpad-up{grid-column:2; grid-row:1;}
+  #dpad-left{grid-column:1; grid-row:2;}
+  #dpad-right{grid-column:3; grid-row:2;}
+  #dpad-down{grid-column:2; grid-row:3;}
+
+  .abpad{
+    display:grid;
+    grid-template-columns: 54px 54px;
+    grid-template-rows: 54px 54px;
+    gap:8px;
+    pointer-events:auto;
+    align-self:flex-end;
+  }
+  .abpad button{
+    border-radius:50%;
+    background:rgba(255,255,255,0.9); border:2px solid #000; color:#000;
+    font-family:'Press Start 2P', monospace; font-size:0.9rem; touch-action:none; user-select:none;
+  }
+  .abpad button:active{ background:#000; color:#fff; }
+  #btn-b{ grid-column:1; grid-row:2; }
+  #btn-a{ grid-column:2; grid-row:1; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="hint">pfeiltasten/wasd · enter = a · esc = b</div>
+  <canvas id="game"></canvas>
+  <div id="loading">lädt…</div>
+</div>
+
+<div id="controls">
+  <div class="pad">
+    <button id="dpad-up">▲</button>
+    <button id="dpad-left">◀</button>
+    <button id="dpad-right">▶</button>
+    <button id="dpad-down">▼</button>
+  </div>
+  <div class="abpad">
+    <button id="btn-b">B</button>
+    <button id="btn-a">A</button>
+  </div>
+</div>
+
+<script>
+/* ==========================================================
+   GRUNDKONFIGURATION
+   TILE/COLS/ROWS bestimmen nur noch die *interne* Bewegungslogik
+   (unsichtbares Raster für die Pokémon-Schritte). Visuell siehst
+   du davon nichts mehr — dein Hintergrundbild kann komplett frei
+   gestaltet sein.
+   ========================================================== */
+const TILE = 32;
+const COLS = 12;
+const ROWS = 8;
+const MOVE_MS = 150;
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = COLS * TILE;
+canvas.height = ROWS * TILE;
+ctx.imageSmoothingEnabled = false;
+
+/* ==========================================================
+   KARTE (nur für Kollision, wird nicht gezeichnet)
+   0 = begehbar, 1 = Wand. Rand ist automatisch Wand.
+   Richte deine Hintergrundgrafik gedanklich an diesem Raster
+   aus, oder blende es zum Ausrichten kurz ein: Taste "g".
+   ========================================================== */
+const map = [];
+for (let y = 0; y < ROWS; y++) {
+  const row = [];
+  for (let x = 0; x < COLS; x++) {
+    const edge = (x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1);
+    row.push(edge ? 1 : 0);
+  }
+  map.push(row);
+}
+
+/* ==========================================================
+   ASSETS
+   Trage hier die Pfade zu deinen eigenen Bildern ein.
+   JPG funktioniert technisch problemlos — Achtung: JPG hat
+   keinen transparenten Hintergrund und ist verlustbehaftet
+   komprimiert, das kann an harten Pixelkanten leichte Artefakte
+   erzeugen. Für Sprites mit "durchsichtigem" Rand ist PNG die
+   sauberere Wahl, JPG passt aber gut für den Vollbild-Hintergrund
+   und für Icons mit eigenem, undurchsichtigem Rahmen.
+   Leerer String "" = benutzt den eingebauten Platzhalter.
+   ========================================================== */
+const ASSET_PATHS = {
+  background: "assets/background.jpg",
+  player: {
+    down:  "assets/player-down.jpg",
+    up:    "assets/player-up.jpg",
+    left:  "assets/player-left.jpg",
+    right: "assets/player-right.jpg",
+  },
+};
+
+const stations = [
+  { x: 2,  y: 2, label: "instagram", url: "https://instagram.com/deinhandle",       icon: "assets/icon-instagram.jpg" },
+  { x: 9,  y: 2, label: "tiktok",    url: "https://tiktok.com/@deinhandle",         icon: "assets/icon-tiktok.jpg" },
+  { x: 2,  y: 5, label: "spotify",   url: "https://open.spotify.com/artist/xxxx",   icon: "assets/icon-spotify.jpg" },
+  { x: 9,  y: 5, label: "mail",      url: "mailto:du@example.com",                  icon: "assets/icon-mail.jpg" },
+];
+
+/* ==========================================================
+   FALLBACK-BITMAPS (greifen automatisch, falls ein Bild fehlt
+   oder der Pfad noch leer ist — so läuft alles sofort, auch
+   bevor du eigene Dateien hochgeladen hast)
+   ========================================================== */
+const FALLBACK_PLAYER = [
+  "00011111100",
+  "00111111110",
+  "01111111111",
+  "01101111011",
+  "01111111111",
+  "00111111110",
+  "00011111100",
+  "00111111110",
+  "01111111111",
+  "00110000110",
+  "01111001111",
+];
+const FALLBACK_ICON = [
+  "00000000000",
+  "00111111100",
+  "01111111110",
+  "01100011110",
+  "11000000111",
+  "11000000111",
+  "01100011110",
+  "01111111110",
+  "00111111100",
+  "00000000000",
+  "00000000000",
+];
+
+function drawFallback(bitmap, px, py, size) {
+  ctx.fillStyle = "#000";
+  const cell = size / bitmap.length;
+  for (let row = 0; row < bitmap.length; row++) {
+    for (let col = 0; col < bitmap[row].length; col++) {
+      if (bitmap[row][col] === "1") ctx.fillRect(px + col * cell, py + row * cell, cell, cell);
+    }
+  }
+}
+
+/* ==========================================================
+   ASSET-LOADING
+   ========================================================== */
+function loadImage(path) {
+  return new Promise((resolve) => {
+    if (!path) { resolve(null); return; }
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = path;
+  });
+}
+
+const images = { background: null, player: {}, stations: {} };
+
+async function loadAssets() {
+  images.background = await loadImage(ASSET_PATHS.background);
+  for (const dir of ["down", "up", "left", "right"]) {
+    images.player[dir] = await loadImage(ASSET_PATHS.player[dir]);
+  }
+  for (const s of stations) {
+    images.stations[s.label] = await loadImage(s.icon);
+  }
+  document.getElementById('loading').style.display = 'none';
+}
+
+/* ==========================================================
+   SPIELER-ZUSTAND
+   ========================================================== */
+const player = {
+  x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2),
+  px: 0, py: 0, dir: "down", moving: false,
+  fromX: 0, fromY: 0, toX: 0, toY: 0, moveStart: 0,
+};
+player.px = player.x * TILE;
+player.py = player.y * TILE;
+
+const keys = {};
+let dialogOpen = false;
+let activeStation = null;
+let showGrid = false;
+
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  if (k === "g") showGrid = !showGrid;
+  if (dialogOpen && (k === "enter" || k === " ")) confirmAction();
+  else if (dialogOpen && k === "escape") closeDialog();
+  else if (!dialogOpen && k === "enter") pressA();
+});
+window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+function pressA() { tryInteract(); }
+function pressB() { if (dialogOpen) closeDialog(); }
+function confirmAction() { window.open(activeStation.url, "_blank"); closeDialog(); }
+
+function tryInteract() {
+  const dx = player.dir === "left" ? -1 : player.dir === "right" ? 1 : 0;
+  const dy = player.dir === "up" ? -1 : player.dir === "down" ? 1 : 0;
+  const st = stations.find(s => s.x === player.x + dx && s.y === player.y + dy);
+  if (st) { dialogOpen = true; activeStation = st; }
+}
+function closeDialog() { dialogOpen = false; activeStation = null; }
+
+/* ==========================================================
+   TOUCH-STEUERUNG — Steuerkreuz + A/B, echtes Multitouch
+   (jeder Button hat eigene, unabhängige Listener, daher lassen
+   sich z.B. Richtung + A gleichzeitig gedrückt halten)
+   ========================================================== */
+function bindDirection(id, key) {
+  const el = document.getElementById(id);
+  el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[key] = true; }, { passive: false });
+  el.addEventListener('touchend',   (e) => { e.preventDefault(); keys[key] = false; }, { passive: false });
+  el.addEventListener('touchcancel',(e) => { e.preventDefault(); keys[key] = false; }, { passive: false });
+}
+bindDirection('dpad-up', 'arrowup');
+bindDirection('dpad-down', 'arrowdown');
+bindDirection('dpad-left', 'arrowleft');
+bindDirection('dpad-right', 'arrowright');
+
+document.getElementById('btn-a').addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (dialogOpen) confirmAction(); else pressA();
+}, { passive: false });
+document.getElementById('btn-b').addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  pressB();
+}, { passive: false });
+
+/* ==========================================================
+   BEWEGUNG
+   ========================================================== */
+function walkable(x, y) {
+  if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
+  if (map[y][x] === 1) return false;
+  if (stations.some(s => s.x === x && s.y === y)) return false;
+  return true;
+}
+
+function update(t) {
+  if (dialogOpen) return;
+
+  if (player.moving) {
+    const pct = Math.min(1, (t - player.moveStart) / MOVE_MS);
+    player.px = player.fromX + (player.toX - player.fromX) * pct;
+    player.py = player.fromY + (player.toY - player.fromY) * pct;
+    if (pct >= 1) { player.moving = false; player.px = player.toX; player.py = player.toY; }
+    return;
+  }
+
+  let dx = 0, dy = 0, dir = player.dir;
+  if (keys['arrowup'] || keys['w']) { dy = -1; dir = 'up'; }
+  else if (keys['arrowdown'] || keys['s']) { dy = 1; dir = 'down'; }
+  else if (keys['arrowleft'] || keys['a']) { dx = -1; dir = 'left'; }
+  else if (keys['arrowright'] || keys['d']) { dx = 1; dir = 'right'; }
+
+  player.dir = dir;
+
+  if (dx !== 0 || dy !== 0) {
+    const nx = player.x + dx, ny = player.y + dy;
+    if (walkable(nx, ny)) {
+      player.fromX = player.px; player.fromY = player.py;
+      player.toX = nx * TILE; player.toY = ny * TILE;
+      player.x = nx; player.y = ny;
+      player.moving = true;
+      player.moveStart = t;
+    }
+  }
+}
+
+/* ==========================================================
+   RENDERING
+   ========================================================== */
+function draw() {
+  if (images.background) {
+    ctx.drawImage(images.background, 0, 0, canvas.width, canvas.height);
+  } else {
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  if (showGrid) {
+    ctx.strokeStyle = "rgba(0,0,0,0.25)";
+    for (let x = 0; x <= COLS; x++) { ctx.beginPath(); ctx.moveTo(x*TILE,0); ctx.lineTo(x*TILE,canvas.height); ctx.stroke(); }
+    for (let y = 0; y <= ROWS; y++) { ctx.beginPath(); ctx.moveTo(0,y*TILE); ctx.lineTo(canvas.width,y*TILE); ctx.stroke(); }
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    for (let y=0;y<ROWS;y++) for (let x=0;x<COLS;x++) if (map[y][x]===1) ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
+  }
+
+  stations.forEach(s => {
+    const img = images.stations[s.label];
+    if (img) ctx.drawImage(img, s.x * TILE, s.y * TILE, TILE, TILE);
+    else drawFallback(FALLBACK_ICON, s.x * TILE, s.y * TILE, TILE);
+  });
+
+  const bob = player.moving ? Math.sin((performance.now() % MOVE_MS) / MOVE_MS * Math.PI) : 0;
+  const pImg = images.player[player.dir];
+  if (pImg) ctx.drawImage(pImg, player.px, player.py - bob, TILE, TILE);
+  else drawFallback(FALLBACK_PLAYER, player.px, player.py - bob, TILE);
+
+  if (dialogOpen) {
+    const bx = 8, by = canvas.height - 52, bw = canvas.width - 16, bh = 44;
+    ctx.fillStyle = "#fff"; ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = "#000"; ctx.lineWidth = 2; ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = "#000";
+    ctx.font = "10px 'Press Start 2P', monospace";
+    ctx.fillText(activeStation.label, bx + 10, by + 18);
+    ctx.font = "7px 'Press Start 2P', monospace";
+    ctx.fillText("a: öffnen   b: schließen", bx + 10, by + 33);
+  }
+}
+
+function loop(t) {
+  update(t);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function resize() {
+  const maxW = window.innerWidth * 0.92;
+  const maxH = window.innerHeight * 0.7;
+  const scale = Math.max(1, Math.floor(Math.min(maxW / canvas.width, maxH / canvas.height)));
+  canvas.style.width = (canvas.width * scale) + "px";
+  canvas.style.height = (canvas.height * scale) + "px";
+}
+window.addEventListener('resize', resize);
+resize();
+
+loadAssets().then(() => requestAnimationFrame(loop));
+</script>
+</body>
+</html>
