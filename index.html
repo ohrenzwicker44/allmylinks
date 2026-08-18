@@ -8,52 +8,50 @@
 <style>
   *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body{
-    margin:0; padding:0; height:100%;
+    margin:0; padding:0;
+    width:100%; height:100%;
     background:#fff;
-    display:flex; align-items:center; justify-content:center;
     overflow:hidden;
     font-family:'Press Start 2P', monospace;
     touch-action: none;
   }
-  #stage{ position:relative; }
-  canvas{
+  #game{
+    position:fixed; inset:0;
     display:block;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
-    border:4px solid #000;
-  }
-  #hint{
-    position:absolute; top:-2.4rem; left:0; right:0;
-    text-align:center; font-size:0.5rem; color:#000;
   }
   #loading{
-    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-    background:#fff; font-size:0.6rem; color:#000; z-index:5;
+    position:fixed; inset:0; z-index:20;
+    display:flex; align-items:center; justify-content:center;
+    background:#fff; color:#000; font-size:0.7rem;
   }
 
+  /* ===== Pixel-Style Bedienoberfläche — immer sichtbar ===== */
   #controls{
-    display:none;
     position:fixed; left:0; right:0; bottom:0;
-    justify-content:space-between; align-items:flex-end;
-    padding: 0 20px 20px;
+    display:flex; justify-content:space-between; align-items:flex-end;
+    padding: 0 16px 16px;
     pointer-events:none;
     z-index:10;
   }
-  @media (max-width:800px), (pointer:coarse){
-    #controls{ display:flex; }
+  .pixel-btn{
+    background:#fff; color:#000;
+    border:3px solid #000;
+    font-family:'Press Start 2P', monospace;
+    font-size:0.9rem;
+    display:flex; align-items:center; justify-content:center;
+    user-select:none; pointer-events:auto;
+    clip-path: polygon(25% 0%, 75% 0%, 100% 25%, 100% 75%, 75% 100%, 25% 100%, 0% 75%, 0% 25%);
   }
+  .pixel-btn.pressed{ background:#000; color:#fff; }
+
   .pad{
     display:grid;
-    grid-template-columns: 46px 46px 46px;
-    grid-template-rows: 46px 46px 46px;
-    gap:2px;
-    pointer-events:auto;
+    grid-template-columns: 44px 44px 44px;
+    grid-template-rows: 44px 44px 44px;
+    gap:3px;
   }
-  .pad button{
-    background:rgba(255,255,255,0.9); border:2px solid #000; color:#000;
-    font-size:1rem; touch-action:none; user-select:none;
-  }
-  .pad button:active{ background:#000; color:#fff; }
   #dpad-up{grid-column:2; grid-row:1;}
   #dpad-left{grid-column:1; grid-row:2;}
   #dpad-right{grid-column:3; grid-row:2;}
@@ -61,146 +59,105 @@
 
   .abpad{
     display:grid;
-    grid-template-columns: 54px 54px;
-    grid-template-rows: 54px 54px;
+    grid-template-columns: 52px 52px;
+    grid-template-rows: 52px 52px;
     gap:8px;
-    pointer-events:auto;
-    align-self:flex-end;
   }
-  .abpad button{
-    border-radius:50%;
-    background:rgba(255,255,255,0.9); border:2px solid #000; color:#000;
-    font-family:'Press Start 2P', monospace; font-size:0.9rem; touch-action:none; user-select:none;
-  }
-  .abpad button:active{ background:#000; color:#fff; }
   #btn-b{ grid-column:1; grid-row:2; }
   #btn-a{ grid-column:2; grid-row:1; }
 </style>
 </head>
 <body>
 
-<div id="stage">
-  <div id="hint">pfeiltasten/wasd · enter = a · esc = b</div>
-  <canvas id="game"></canvas>
-  <div id="loading">lädt…</div>
-</div>
+<canvas id="game"></canvas>
+<div id="loading">lädt…</div>
 
 <div id="controls">
   <div class="pad">
-    <button id="dpad-up">▲</button>
-    <button id="dpad-left">◀</button>
-    <button id="dpad-right">▶</button>
-    <button id="dpad-down">▼</button>
+    <button class="pixel-btn" id="dpad-up">▲</button>
+    <button class="pixel-btn" id="dpad-left">◀</button>
+    <button class="pixel-btn" id="dpad-right">▶</button>
+    <button class="pixel-btn" id="dpad-down">▼</button>
   </div>
   <div class="abpad">
-    <button id="btn-b">B</button>
-    <button id="btn-a">A</button>
+    <button class="pixel-btn" id="btn-b">B</button>
+    <button class="pixel-btn" id="btn-a">A</button>
   </div>
 </div>
 
 <script>
 /* ==========================================================
    GRUNDKONFIGURATION
-   TILE/COLS/ROWS bestimmen nur noch die *interne* Bewegungslogik
-   (unsichtbares Raster für die Pokémon-Schritte). Visuell siehst
-   du davon nichts mehr — dein Hintergrundbild kann komplett frei
-   gestaltet sein.
    ========================================================== */
-const TILE = 32;
-const COLS = 12;
-const ROWS = 8;
-const MOVE_MS = 150;
+const PLAYER_SIZE = 32;     // Charaktergröße in px — passend zu deinen 32x32-Sprites
+const ICON_SIZE = 32;       // Icon-Größe in px
+const SPEED = 170;          // Bewegungsgeschwindigkeit in px/Sekunde
+const ANIM_INTERVAL = 160;  // ms zwischen den beiden Lauf-Frames
+const MIN_ICON_GAP = ICON_SIZE + PLAYER_SIZE + 40; // Mindestabstand zwischen zwei Icons (Mittelpunkt zu Mittelpunkt)
+const INTERACT_RANGE = PLAYER_SIZE / 2 + ICON_SIZE / 2 + 16; // wie nah man für "A" dran sein muss
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-canvas.width = COLS * TILE;
-canvas.height = ROWS * TILE;
-ctx.imageSmoothingEnabled = false;
 
-/* ==========================================================
-   KARTE (nur für Kollision, wird nicht gezeichnet)
-   0 = begehbar, 1 = Wand. Rand ist automatisch Wand.
-   Richte deine Hintergrundgrafik gedanklich an diesem Raster
-   aus, oder blende es zum Ausrichten kurz ein: Taste "g".
-   ========================================================== */
-const map = [];
-for (let y = 0; y < ROWS; y++) {
-  const row = [];
-  for (let x = 0; x < COLS; x++) {
-    const edge = (x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1);
-    row.push(edge ? 1 : 0);
-  }
-  map.push(row);
-}
+let WORLD = { width: 0, height: 0 };
 
 /* ==========================================================
    ASSETS
-   Trage hier die Pfade zu deinen eigenen Bildern ein.
-   JPG funktioniert technisch problemlos — Achtung: JPG hat
-   keinen transparenten Hintergrund und ist verlustbehaftet
-   komprimiert, das kann an harten Pixelkanten leichte Artefakte
-   erzeugen. Für Sprites mit "durchsichtigem" Rand ist PNG die
-   sauberere Wahl, JPG passt aber gut für den Vollbild-Hintergrund
-   und für Icons mit eigenem, undurchsichtigem Rahmen.
-   Leerer String "" = benutzt den eingebauten Platzhalter.
+   Trage hier deine eigenen Dateien ein. PNG empfohlen für
+   Charakter und Icons (Transparenz nötig, sie schweben frei
+   über dem Hintergrund). Hintergrund darf JPG bleiben.
+
+   Jeder Charakter braucht 2 Bilder pro Richtung:
+   Frame 1 = Stehen/erster Schritt, Frame 2 = zweiter Schritt.
+   Beim Stillstehen wird automatisch Frame 1 gezeigt.
+
+   BENÖTIGTE DATEINAMEN (alle 32x32 px):
+     assets/player-down-1.png   assets/player-down-2.png
+     assets/player-up-1.png     assets/player-up-2.png
+     assets/player-left-1.png   assets/player-left-2.png
+     assets/player-right-1.png  assets/player-right-2.png
+     assets/icon-instagram.png
+     assets/icon-tiktok.png
+     assets/icon-spotify.png
+     assets/icon-mail.png
+     assets/background.jpg      (Vollbild, Format optional)
    ========================================================== */
 const ASSET_PATHS = {
   background: "assets/background.jpg",
   player: {
-    down:  "assets/player-down.jpg",
-    up:    "assets/player-up.jpg",
-    left:  "assets/player-left.jpg",
-    right: "assets/player-right.jpg",
+    down:  ["assets/player-down-1.png",  "assets/player-down-2.png"],
+    up:    ["assets/player-up-1.png",    "assets/player-up-2.png"],
+    left:  ["assets/player-left-1.png",  "assets/player-left-2.png"],
+    right: ["assets/player-right-1.png", "assets/player-right-2.png"],
   },
 };
 
 const stations = [
-  { x: 2,  y: 2, label: "instagram", url: "https://instagram.com/deinhandle",       icon: "assets/icon-instagram.jpg" },
-  { x: 9,  y: 2, label: "tiktok",    url: "https://tiktok.com/@deinhandle",         icon: "assets/icon-tiktok.jpg" },
-  { x: 2,  y: 5, label: "spotify",   url: "https://open.spotify.com/artist/xxxx",   icon: "assets/icon-spotify.jpg" },
-  { x: 9,  y: 5, label: "mail",      url: "mailto:du@example.com",                  icon: "assets/icon-mail.jpg" },
+  { label: "instagram", url: "https://instagram.com/deinhandle",     icon: "assets/icon-instagram.png" },
+  { label: "tiktok",    url: "https://tiktok.com/@deinhandle",       icon: "assets/icon-tiktok.png" },
+  { label: "spotify",   url: "https://open.spotify.com/artist/xxxx", icon: "assets/icon-spotify.png" },
+  { label: "mail",      url: "mailto:du@example.com",                icon: "assets/icon-mail.png" },
 ];
 
 /* ==========================================================
-   FALLBACK-BITMAPS (greifen automatisch, falls ein Bild fehlt
-   oder der Pfad noch leer ist — so läuft alles sofort, auch
-   bevor du eigene Dateien hochgeladen hast)
+   FALLBACK-BITMAPS (greifen automatisch, solange eigene
+   Dateien fehlen — Spiel läuft sofort, auch ohne Assets)
    ========================================================== */
 const FALLBACK_PLAYER = [
-  "00011111100",
-  "00111111110",
-  "01111111111",
-  "01101111011",
-  "01111111111",
-  "00111111110",
-  "00011111100",
-  "00111111110",
-  "01111111111",
-  "00110000110",
-  "01111001111",
+  "00011111100","00111111110","01111111111","01101111011","01111111111",
+  "00111111110","00011111100","00111111110","01111111111","00110000110","01111001111",
 ];
 const FALLBACK_ICON = [
-  "00000000000",
-  "00111111100",
-  "01111111110",
-  "01100011110",
-  "11000000111",
-  "11000000111",
-  "01100011110",
-  "01111111110",
-  "00111111100",
-  "00000000000",
-  "00000000000",
+  "00000000000","00111111100","01111111110","01100011110","11000000111",
+  "11000000111","01100011110","01111111110","00111111100","00000000000","00000000000",
 ];
-
-function drawFallback(bitmap, px, py, size) {
+function drawFallback(bitmap, cx, cy, size) {
   ctx.fillStyle = "#000";
   const cell = size / bitmap.length;
-  for (let row = 0; row < bitmap.length; row++) {
-    for (let col = 0; col < bitmap[row].length; col++) {
+  const px = cx - size / 2, py = cy - size / 2;
+  for (let row = 0; row < bitmap.length; row++)
+    for (let col = 0; col < bitmap[row].length; col++)
       if (bitmap[row][col] === "1") ctx.fillRect(px + col * cell, py + row * cell, cell, cell);
-    }
-  }
 }
 
 /* ==========================================================
@@ -221,7 +178,10 @@ const images = { background: null, player: {}, stations: {} };
 async function loadAssets() {
   images.background = await loadImage(ASSET_PATHS.background);
   for (const dir of ["down", "up", "left", "right"]) {
-    images.player[dir] = await loadImage(ASSET_PATHS.player[dir]);
+    images.player[dir] = [
+      await loadImage(ASSET_PATHS.player[dir][0]),
+      await loadImage(ASSET_PATHS.player[dir][1]),
+    ];
   }
   for (const s of stations) {
     images.stations[s.label] = await loadImage(s.icon);
@@ -230,25 +190,41 @@ async function loadAssets() {
 }
 
 /* ==========================================================
-   SPIELER-ZUSTAND
+   ZUFÄLLIGE ICON-VERTEILUNG
+   Rejection-Sampling: neue Position wird verworfen, wenn sie
+   näher als MIN_ICON_GAP an einer bereits platzierten liegt.
+   Positionen werden als Anteil (0–1) der Weltgröße gespeichert,
+   damit sie sich beim Resize proportional mitverschieben.
    ========================================================== */
-const player = {
-  x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2),
-  px: 0, py: 0, dir: "down", moving: false,
-  fromX: 0, fromY: 0, toX: 0, toY: 0, moveStart: 0,
-};
-player.px = player.x * TILE;
-player.py = player.y * TILE;
+function distributeStations() {
+  const margin = 48;
+  const placed = [];
+  stations.forEach((s) => {
+    let x, y, tries = 0, ok;
+    do {
+      x = margin + Math.random() * (WORLD.width - margin * 2);
+      y = margin + Math.random() * (WORLD.height - margin * 2);
+      ok = placed.every(p => Math.hypot(p.x - x, p.y - y) >= MIN_ICON_GAP);
+      tries++;
+    } while (!ok && tries < 400);
+    placed.push({ x, y });
+    s.fx = x / WORLD.width;
+    s.fy = y / WORLD.height;
+  });
+}
+
+/* ==========================================================
+   SPIELER-ZUSTAND (freie Pixelbewegung, kein Raster)
+   ========================================================== */
+const player = { x: 0, y: 0, dir: "down", moving: false, frame: 0, lastFrameTime: 0 };
 
 const keys = {};
 let dialogOpen = false;
 let activeStation = null;
-let showGrid = false;
 
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   keys[k] = true;
-  if (k === "g") showGrid = !showGrid;
   if (dialogOpen && (k === "enter" || k === " ")) confirmAction();
   else if (dialogOpen && k === "escape") closeDialog();
   else if (!dialogOpen && k === "enter") pressA();
@@ -260,76 +236,99 @@ function pressB() { if (dialogOpen) closeDialog(); }
 function confirmAction() { window.open(activeStation.url, "_blank"); closeDialog(); }
 
 function tryInteract() {
-  const dx = player.dir === "left" ? -1 : player.dir === "right" ? 1 : 0;
-  const dy = player.dir === "up" ? -1 : player.dir === "down" ? 1 : 0;
-  const st = stations.find(s => s.x === player.x + dx && s.y === player.y + dy);
-  if (st) { dialogOpen = true; activeStation = st; }
+  let nearest = null, nearestDist = Infinity;
+  for (const s of stations) {
+    const sx = s.fx * WORLD.width, sy = s.fy * WORLD.height;
+    const d = Math.hypot(sx - player.x, sy - player.y);
+    if (d < INTERACT_RANGE && d < nearestDist) { nearest = s; nearestDist = d; }
+  }
+  if (nearest) { dialogOpen = true; activeStation = nearest; }
 }
 function closeDialog() { dialogOpen = false; activeStation = null; }
 
 /* ==========================================================
-   TOUCH-STEUERUNG — Steuerkreuz + A/B, echtes Multitouch
-   (jeder Button hat eigene, unabhängige Listener, daher lassen
-   sich z.B. Richtung + A gleichzeitig gedrückt halten)
+   BEDIENOBERFLÄCHE — Pointer Events statt reiner Touch-Events,
+   funktioniert dadurch mit Maus, Finger und Stift gleichzeitig,
+   und mehrere Buttons lassen sich gleichzeitig halten (Multitouch).
    ========================================================== */
-function bindDirection(id, key) {
+function bindButton(id, onDown, onUp) {
   const el = document.getElementById(id);
-  el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[key] = true; }, { passive: false });
-  el.addEventListener('touchend',   (e) => { e.preventDefault(); keys[key] = false; }, { passive: false });
-  el.addEventListener('touchcancel',(e) => { e.preventDefault(); keys[key] = false; }, { passive: false });
+  const down = (e) => { e.preventDefault(); el.classList.add('pressed'); onDown && onDown(); };
+  const up = (e) => { e.preventDefault(); el.classList.remove('pressed'); onUp && onUp(); };
+  el.addEventListener('pointerdown', down);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+  el.addEventListener('pointerleave', up);
 }
-bindDirection('dpad-up', 'arrowup');
-bindDirection('dpad-down', 'arrowdown');
-bindDirection('dpad-left', 'arrowleft');
-bindDirection('dpad-right', 'arrowright');
-
-document.getElementById('btn-a').addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  if (dialogOpen) confirmAction(); else pressA();
-}, { passive: false });
-document.getElementById('btn-b').addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  pressB();
-}, { passive: false });
+bindButton('dpad-up',    () => keys['arrowup'] = true,    () => keys['arrowup'] = false);
+bindButton('dpad-down',  () => keys['arrowdown'] = true,  () => keys['arrowdown'] = false);
+bindButton('dpad-left',  () => keys['arrowleft'] = true,  () => keys['arrowleft'] = false);
+bindButton('dpad-right', () => keys['arrowright'] = true, () => keys['arrowright'] = false);
+bindButton('btn-a', () => { if (dialogOpen) confirmAction(); else pressA(); });
+bindButton('btn-b', () => { pressB(); });
 
 /* ==========================================================
-   BEWEGUNG
+   BEWEGUNG — freie Vektorbewegung, achsengetrennte Kollision
+   (kann an Icons entlangrutschen statt hart stehen zu bleiben)
    ========================================================== */
-function walkable(x, y) {
-  if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return false;
-  if (map[y][x] === 1) return false;
-  if (stations.some(s => s.x === x && s.y === y)) return false;
-  return true;
+function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
+function collidesAt(x, y) {
+  const half = PLAYER_SIZE / 2;
+  for (const s of stations) {
+    const sx = s.fx * WORLD.width, sy = s.fy * WORLD.height;
+    const pad = 6; // kleiner Puffer, damit Icons nicht direkt "geklebt" wirken
+    if (rectsOverlap(
+      x - half, y - half, PLAYER_SIZE, PLAYER_SIZE,
+      sx - ICON_SIZE / 2 - pad, sy - ICON_SIZE / 2 - pad, ICON_SIZE + pad * 2, ICON_SIZE + pad * 2
+    )) return true;
+  }
+  return false;
+}
+
+let lastTime = 0;
 function update(t) {
-  if (dialogOpen) return;
+  const dt = Math.min(48, t - lastTime) / 1000;
+  lastTime = t;
+  if (dialogOpen) { player.moving = false; return; }
+
+  let dx = 0, dy = 0;
+  if (keys['arrowup'] || keys['w']) dy -= 1;
+  if (keys['arrowdown'] || keys['s']) dy += 1;
+  if (keys['arrowleft'] || keys['a']) dx -= 1;
+  if (keys['arrowright'] || keys['d']) dx += 1;
+
+  player.moving = (dx !== 0 || dy !== 0);
 
   if (player.moving) {
-    const pct = Math.min(1, (t - player.moveStart) / MOVE_MS);
-    player.px = player.fromX + (player.toX - player.fromX) * pct;
-    player.py = player.fromY + (player.toY - player.fromY) * pct;
-    if (pct >= 1) { player.moving = false; player.px = player.toX; player.py = player.toY; }
-    return;
-  }
+    const len = Math.hypot(dx, dy);
+    dx /= len; dy /= len;
 
-  let dx = 0, dy = 0, dir = player.dir;
-  if (keys['arrowup'] || keys['w']) { dy = -1; dir = 'up'; }
-  else if (keys['arrowdown'] || keys['s']) { dy = 1; dir = 'down'; }
-  else if (keys['arrowleft'] || keys['a']) { dx = -1; dir = 'left'; }
-  else if (keys['arrowright'] || keys['d']) { dx = 1; dir = 'right'; }
+    if (dy < 0) player.dir = 'up';
+    else if (dy > 0) player.dir = 'down';
+    else if (dx < 0) player.dir = 'left';
+    else if (dx > 0) player.dir = 'right';
 
-  player.dir = dir;
+    const half = PLAYER_SIZE / 2;
+    const stepX = dx * SPEED * dt;
+    const stepY = dy * SPEED * dt;
 
-  if (dx !== 0 || dy !== 0) {
-    const nx = player.x + dx, ny = player.y + dy;
-    if (walkable(nx, ny)) {
-      player.fromX = player.px; player.fromY = player.py;
-      player.toX = nx * TILE; player.toY = ny * TILE;
-      player.x = nx; player.y = ny;
-      player.moving = true;
-      player.moveStart = t;
+    let nx = player.x + stepX;
+    nx = Math.max(half, Math.min(WORLD.width - half, nx));
+    if (!collidesAt(nx, player.y)) player.x = nx;
+
+    let ny = player.y + stepY;
+    ny = Math.max(half, Math.min(WORLD.height - half, ny));
+    if (!collidesAt(player.x, ny)) player.y = ny;
+
+    if (t - player.lastFrameTime > ANIM_INTERVAL) {
+      player.frame = player.frame === 0 ? 1 : 0;
+      player.lastFrameTime = t;
     }
+  } else {
+    player.frame = 0;
   }
 }
 
@@ -337,41 +336,31 @@ function update(t) {
    RENDERING
    ========================================================== */
 function draw() {
-  if (images.background) {
-    ctx.drawImage(images.background, 0, 0, canvas.width, canvas.height);
-  } else {
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-  }
-
-  if (showGrid) {
-    ctx.strokeStyle = "rgba(0,0,0,0.25)";
-    for (let x = 0; x <= COLS; x++) { ctx.beginPath(); ctx.moveTo(x*TILE,0); ctx.lineTo(x*TILE,canvas.height); ctx.stroke(); }
-    for (let y = 0; y <= ROWS; y++) { ctx.beginPath(); ctx.moveTo(0,y*TILE); ctx.lineTo(canvas.width,y*TILE); ctx.stroke(); }
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    for (let y=0;y<ROWS;y++) for (let x=0;x<COLS;x++) if (map[y][x]===1) ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
-  }
+  if (images.background) ctx.drawImage(images.background, 0, 0, WORLD.width, WORLD.height);
+  else { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, WORLD.width, WORLD.height); }
 
   stations.forEach(s => {
+    const sx = s.fx * WORLD.width, sy = s.fy * WORLD.height;
     const img = images.stations[s.label];
-    if (img) ctx.drawImage(img, s.x * TILE, s.y * TILE, TILE, TILE);
-    else drawFallback(FALLBACK_ICON, s.x * TILE, s.y * TILE, TILE);
+    if (img) ctx.drawImage(img, sx - ICON_SIZE / 2, sy - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
+    else drawFallback(FALLBACK_ICON, sx, sy, ICON_SIZE);
   });
 
-  const bob = player.moving ? Math.sin((performance.now() % MOVE_MS) / MOVE_MS * Math.PI) : 0;
-  const pImg = images.player[player.dir];
-  if (pImg) ctx.drawImage(pImg, player.px, player.py - bob, TILE, TILE);
-  else drawFallback(FALLBACK_PLAYER, player.px, player.py - bob, TILE);
+  const pFrames = images.player[player.dir];
+  const pImg = pFrames ? pFrames[player.frame] : null;
+  if (pImg) ctx.drawImage(pImg, player.x - PLAYER_SIZE / 2, player.y - PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+  else drawFallback(FALLBACK_PLAYER, player.x, player.y, PLAYER_SIZE);
 
   if (dialogOpen) {
-    const bx = 8, by = canvas.height - 52, bw = canvas.width - 16, bh = 44;
+    const bw = Math.min(WORLD.width - 24, 420), bh = 56;
+    const bx = (WORLD.width - bw) / 2, by = WORLD.height - bh - 24;
     ctx.fillStyle = "#fff"; ctx.fillRect(bx, by, bw, bh);
-    ctx.strokeStyle = "#000"; ctx.lineWidth = 2; ctx.strokeRect(bx, by, bw, bh);
+    ctx.strokeStyle = "#000"; ctx.lineWidth = 3; ctx.strokeRect(bx, by, bw, bh);
     ctx.fillStyle = "#000";
-    ctx.font = "10px 'Press Start 2P', monospace";
-    ctx.fillText(activeStation.label, bx + 10, by + 18);
-    ctx.font = "7px 'Press Start 2P', monospace";
-    ctx.fillText("a: öffnen   b: schließen", bx + 10, by + 33);
+    ctx.font = "12px 'Press Start 2P', monospace";
+    ctx.fillText(activeStation.label, bx + 14, by + 22);
+    ctx.font = "8px 'Press Start 2P', monospace";
+    ctx.fillText("a: öffnen   b: schließen", bx + 14, by + 40);
   }
 }
 
@@ -381,16 +370,36 @@ function loop(t) {
   requestAnimationFrame(loop);
 }
 
+/* ==========================================================
+   RESPONSIVE — Spielfläche füllt immer den ganzen Bildschirm
+   ========================================================== */
 function resize() {
-  const maxW = window.innerWidth * 0.92;
-  const maxH = window.innerHeight * 0.7;
-  const scale = Math.max(1, Math.floor(Math.min(maxW / canvas.width, maxH / canvas.height)));
-  canvas.style.width = (canvas.width * scale) + "px";
-  canvas.style.height = (canvas.height * scale) + "px";
+  const dpr = window.devicePixelRatio || 1;
+  const w = window.innerWidth, h = window.innerHeight;
+  const oldW = WORLD.width, oldH = WORLD.height;
+
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+
+  WORLD.width = w; WORLD.height = h;
+
+  if (oldW && oldH) {
+    // Spielerposition proportional mitskalieren statt hart zu verschieben
+    player.x = player.x * (w / oldW);
+    player.y = player.y * (h / oldH);
+  } else {
+    player.x = w / 2; player.y = h / 2;
+  }
 }
 window.addEventListener('resize', resize);
-resize();
+window.addEventListener('orientationchange', resize);
 
+resize();
+distributeStations();
 loadAssets().then(() => requestAnimationFrame(loop));
 </script>
 </body>
