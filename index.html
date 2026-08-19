@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>dein.name</title>
+<title>ludo_links</title>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
   *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -120,7 +120,11 @@ function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 // Dauer eines einzelnen Kachel-Schritts in Millisekunden (klassische
 // Tile-Bewegung à la Pokémon/Zelda — konstant, unabhängig von der
 // tatsächlichen Pixelgröße der Kacheln).
-const MOVE_TIME = 180;
+const MOVE_TIME = 320;
+// Dauer, nach der beim Laufen zwischen "_l" und "_r" gewechselt wird.
+// Bei MOVE_TIME/2 sieht man während EINES Kachel-Schritts beide Bilder
+// einmal — bei einem größeren Teiler (z.B. MOVE_TIME/3) öfter.
+const WALK_FRAME_TIME = MOVE_TIME / 2;
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -360,7 +364,7 @@ function placePlayer() {
     }
   }
   player.tileX = tx; player.tileY = ty;
-  player.moving = false; player.dir = 'down'; player.walkFrame = 0;
+  player.moving = false; player.dir = 'down';
 }
 
 function regenerateWorld() {
@@ -382,7 +386,7 @@ const DIR_VECTORS = {
 const player = {
   tileX: 0, tileY: 0,
   fromTileX: 0, fromTileY: 0, toTileX: 0, toTileY: 0,
-  dir: "down", moving: false, moveStart: 0, walkFrame: 0,
+  dir: "down", moving: false, moveStart: 0,
 };
 
 // Richtungs-Stack: die zuletzt gedrückte Richtung gewinnt, so lässt sich
@@ -479,7 +483,6 @@ function update(t) {
     player.toTileX = ntx; player.toTileY = nty;
     player.moveStart = t;
     player.moving = true;
-    player.walkFrame = player.walkFrame === 0 ? 1 : 0;
   }
   // Ist das Zielfeld blockiert, dreht sich der Charakter nur in die
   // gewünschte Richtung, ohne sich zu bewegen.
@@ -518,7 +521,12 @@ function drawPlayer(t) {
   }
   const x = tx * grid.tileSize, y = ty * grid.tileSize;
   const frames = images.player[player.dir];
-  const img = frames ? (player.moving ? (player.walkFrame === 0 ? frames.r : frames.l) : frames.stand) : null;
+  // Zeitbasierte Umschaltung: solange sich der Charakter bewegt, wird alle
+  // WALK_FRAME_TIME ms zwischen "_l" und "_r" gewechselt — durchgehend,
+  // auch über mehrere aneinandergereihte Kachel-Schritte hinweg (also
+  // wirklich l, r, l, r, l, r, ... statt nur ein Bild pro Kachel).
+  const walkPhase = Math.floor(t / WALK_FRAME_TIME) % 2;
+  const img = frames ? (player.moving ? (walkPhase === 0 ? frames.l : frames.r) : frames.stand) : null;
   if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
   else drawFallback(FALLBACK_PLAYER, x + grid.tileSize / 2, y + grid.tileSize / 2, grid.tileSize);
 }
