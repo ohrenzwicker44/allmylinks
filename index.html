@@ -43,8 +43,16 @@
     display:flex; align-items:center; justify-content:center;
     user-select:none; pointer-events:auto;
     clip-path: polygon(25% 0%, 75% 0%, 100% 25%, 100% 75%, 75% 100%, 25% 100%, 0% 75%, 0% 25%);
+    overflow:hidden;
   }
   .pixel-btn.pressed{ background:#000; color:#fff; }
+  /* Wird automatisch gesetzt, sobald ein eigenes Button-Bild erfolgreich lädt */
+  .pixel-btn img{
+    width:100%; height:100%;
+    object-fit:cover;
+    image-rendering:pixelated;
+    pointer-events:none;
+  }
 
   .pad{
     display:grid;
@@ -89,54 +97,113 @@
 /* ==========================================================
    GRUNDKONFIGURATION
    ========================================================== */
-const PLAYER_SIZE = 32;     // Charaktergröße in px — passend zu deinen 32x32-Sprites
-const ICON_SIZE = 32;       // Icon-Größe in px
-const SPEED = 170;          // Bewegungsgeschwindigkeit in px/Sekunde
-const ANIM_INTERVAL = 160;  // ms zwischen den beiden Lauf-Frames
-const MIN_ICON_GAP = ICON_SIZE + PLAYER_SIZE + 40; // Mindestabstand zwischen zwei Icons (Mittelpunkt zu Mittelpunkt)
-const INTERACT_RANGE = PLAYER_SIZE / 2 + ICON_SIZE / 2 + 16; // wie nah man für "A" dran sein muss
+
+// Zielgröße des Rasters: insgesamt ungefähr TARGET_TILE_COUNT Kacheln,
+// aufgeteilt nach Seitenverhältnis des Bildschirms, aber jede Seite
+// (Spalten/Reihen) auf 6–12 Kacheln begrenzt. Ein breiter Screen landet
+// also z.B. bei ~12x6, ein hoher bei ~6x12, ein quadratischer bei ~8x8 —
+// macht in Summe ungefähr 50–100 Kacheln, egal wie das Gerät geformt ist.
+const TARGET_TILE_COUNT = 70;
+const MIN_TILES_PER_SIDE = 6;
+const MAX_TILES_PER_SIDE = 12;
+
+// Die untersten X Kachel-Reihen sind für Icons tabu (dort liegen die
+// Bedienelemente). Der Spieler darf dort trotzdem laufen.
+const BOTTOM_RESERVED_ROWS = 2;
+
+// Mindestabstand zwischen zwei Icons, gemessen in Kacheln (Chebyshev-Distanz).
+// 2 bedeutet: zwischen zwei Icons liegt immer mindestens ein freies Feld.
+const MIN_ICON_TILE_GAP = 2;
+
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+// Dauer eines einzelnen Kachel-Schritts in Millisekunden (klassische
+// Tile-Bewegung à la Pokémon/Zelda — konstant, unabhängig von der
+// tatsächlichen Pixelgröße der Kacheln).
+const MOVE_TIME = 180;
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
-let WORLD = { width: 0, height: 0 };
+// Aktueller Grid-Zustand, wird bei jedem Resize neu berechnet
+let grid = { cols: 0, rows: 0, tileSize: 0, width: 0, height: 0 };
 
 /* ==========================================================
    ASSETS
-   Trage hier deine eigenen Dateien ein. PNG empfohlen für
-   Charakter und Icons (Transparenz nötig, sie schweben frei
-   über dem Hintergrund). Hintergrund darf JPG bleiben.
 
-   Jeder Charakter braucht 2 Bilder pro Richtung:
-   Frame 1 = Stehen/erster Schritt, Frame 2 = zweiter Schritt.
-   Beim Stillstehen wird automatisch Frame 1 gezeigt.
+   Alle Bilder sind 32x32 px PNG mit Transparenz (außer die
+   Hintergrund-Kacheln, die dürfen auch JPG sein, aber PNG ist
+   konsistenter). Sie liegen alle im Ordner "assets/".
 
-   BENÖTIGTE DATEINAMEN (alle 32x32 px):
-     assets/player-down-1.png   assets/player-down-2.png
-     assets/player-up-1.png     assets/player-up-2.png
-     assets/player-left-1.png   assets/player-left-2.png
-     assets/player-right-1.png  assets/player-right-2.png
-     assets/icon-instagram.png
-     assets/icon-tiktok.png
-     assets/icon-spotify.png
-     assets/icon-mail.png
-     assets/background.jpg      (Vollbild, Format optional)
+   CHARAKTER — pro Richtung 3 Bilder:
+     front_stand.png    front_walk_l.png    front_walk_r.png   (Blick zur Kamera / nach unten)
+     back_stand.png     back_walk_l.png     back_walk_r.png    (Rücken zur Kamera / nach oben)
+     left_stand.png     left_walk_l.png     left_walk_r.png
+     right_stand.png    right_walk_l.png    right_walk_r.png
+
+   Verwendung: steht der Charakter still, wird "_stand" der aktuellen
+   Blickrichtung gezeigt. Läuft er, wechseln "_walk_l" und "_walk_r"
+   bei jedem Kachel-Schritt ab.
+
+   ICONS — feste Dateinamen:
+     icon_instagram.png
+     icon_beatstars.png
+     icon_moxfield.png
+     icon_soundcloud.png
+     icon_spotify.png
+     icon_youtube.png
+
+   HINTERGRUND — 5 Kachel-Varianten, werden zufällig gemischt:
+     background_1.png (30%)
+     background_2.png (20%)
+     background_3.png (20%)
+     background_4.png (20%)
+     background_5.png (10%)
+
+   STEUERELEMENTE (optional — fehlen sie, bleiben die aktuellen
+   Pfeil-/Buchstaben-Buttons einfach bestehen):
+     btn_up.png    btn_down.png    btn_left.png    btn_right.png
+     btn_a.png     btn_b.png
    ========================================================== */
 const ASSET_PATHS = {
-  background: "assets/background.jpg",
   player: {
-    down:  ["assets/player-down-1.png",  "assets/player-down-2.png"],
-    up:    ["assets/player-up-1.png",    "assets/player-up-2.png"],
-    left:  ["assets/player-left-1.png",  "assets/player-left-2.png"],
-    right: ["assets/player-right-1.png", "assets/player-right-2.png"],
+    down:  { stand: "assets/front_stand.png", l: "assets/front_walk_l.png", r: "assets/front_walk_r.png" },
+    up:    { stand: "assets/back_stand.png",  l: "assets/back_walk_l.png",  r: "assets/back_walk_r.png" },
+    left:  { stand: "assets/left_stand.png",  l: "assets/left_walk_l.png",  r: "assets/left_walk_r.png" },
+    right: { stand: "assets/right_stand.png", l: "assets/right_walk_l.png", r: "assets/right_walk_r.png" },
+  },
+  background: [
+    "assets/background_1.png",
+    "assets/background_2.png",
+    "assets/background_3.png",
+    "assets/background_4.png",
+    "assets/background_5.png",
+  ],
+  controls: {
+    up:    "assets/btn_up.png",
+    down:  "assets/btn_down.png",
+    left:  "assets/btn_left.png",
+    right: "assets/btn_right.png",
+    a:     "assets/btn_a.png",
+    b:     "assets/btn_b.png",
   },
 };
 
+// Gewichtung der Hintergrund-Kacheln in %, muss zu ASSET_PATHS.background passen
+const BG_WEIGHTS = [30, 20, 20, 20, 10];
+
+/* ==========================================================
+   HIER DEINE LINKS EINTRAGEN
+   Jede Station braucht: label (Anzeigename im Dialog),
+   icon (muss zu "icon_<icon>.png" passen) und url (Ziel-Link).
+   ========================================================== */
 const stations = [
-  { label: "instagram", url: "https://instagram.com/deinhandle",     icon: "assets/icon-instagram.png" },
-  { label: "tiktok",    url: "https://tiktok.com/@deinhandle",       icon: "assets/icon-tiktok.png" },
-  { label: "spotify",   url: "https://open.spotify.com/artist/xxxx", icon: "assets/icon-spotify.png" },
-  { label: "mail",      url: "mailto:du@example.com",                icon: "assets/icon-mail.png" },
+  { label: "instagram",  icon: "instagram",  url: "https://instagram.com/deinhandle" },
+  { label: "beatstars",  icon: "beatstars",  url: "https://www.beatstars.com/deinhandle" },
+  { label: "moxfield",   icon: "moxfield",   url: "https://www.moxfield.com/users/deinhandle" },
+  { label: "soundcloud", icon: "soundcloud", url: "https://soundcloud.com/deinhandle" },
+  { label: "spotify",    icon: "spotify",    url: "https://open.spotify.com/artist/xxxx" },
+  { label: "youtube",    icon: "youtube",    url: "https://youtube.com/@deinhandle" },
 ];
 
 /* ==========================================================
@@ -173,76 +240,194 @@ function loadImage(path) {
   });
 }
 
-const images = { background: null, player: {}, stations: {} };
+// Setzt ein eigenes Bild als Button-Inhalt, falls es geladen werden konnte.
+// Fehlt die Datei, bleibt der bisherige Pfeil/Buchstabe als Fallback stehen.
+function applyButtonImage(id, img) {
+  if (!img) return;
+  const el = document.getElementById(id);
+  el.textContent = "";
+  const im = document.createElement('img');
+  im.src = img.src;
+  el.appendChild(im);
+}
+
+const images = { player: {}, icons: {}, background: [] };
 
 async function loadAssets() {
-  images.background = await loadImage(ASSET_PATHS.background);
   for (const dir of ["down", "up", "left", "right"]) {
-    images.player[dir] = [
-      await loadImage(ASSET_PATHS.player[dir][0]),
-      await loadImage(ASSET_PATHS.player[dir][1]),
-    ];
+    const p = ASSET_PATHS.player[dir];
+    images.player[dir] = {
+      stand: await loadImage(p.stand),
+      l: await loadImage(p.l),
+      r: await loadImage(p.r),
+    };
   }
   for (const s of stations) {
-    images.stations[s.label] = await loadImage(s.icon);
+    images.icons[s.icon] = await loadImage(`assets/icon_${s.icon}.png`);
   }
+  for (const path of ASSET_PATHS.background) {
+    images.background.push(await loadImage(path));
+  }
+  const c = ASSET_PATHS.controls;
+  applyButtonImage('dpad-up', await loadImage(c.up));
+  applyButtonImage('dpad-down', await loadImage(c.down));
+  applyButtonImage('dpad-left', await loadImage(c.left));
+  applyButtonImage('dpad-right', await loadImage(c.right));
+  applyButtonImage('btn-a', await loadImage(c.a));
+  applyButtonImage('btn-b', await loadImage(c.b));
+
   document.getElementById('loading').style.display = 'none';
 }
 
 /* ==========================================================
-   ZUFÄLLIGE ICON-VERTEILUNG
-   Rejection-Sampling: neue Position wird verworfen, wenn sie
-   näher als MIN_ICON_GAP an einer bereits platzierten liegt.
-   Positionen werden als Anteil (0–1) der Weltgröße gespeichert,
-   damit sie sich beim Resize proportional mitverschieben.
+   WELT-GENERIERUNG (Hintergrund-Kacheln + Icon-Positionen)
    ========================================================== */
-function distributeStations() {
-  const margin = 48;
-  const placed = [];
-  stations.forEach((s) => {
-    let x, y, tries = 0, ok;
-    do {
-      x = margin + Math.random() * (WORLD.width - margin * 2);
-      y = margin + Math.random() * (WORLD.height - margin * 2);
-      ok = placed.every(p => Math.hypot(p.x - x, p.y - y) >= MIN_ICON_GAP);
-      tries++;
-    } while (!ok && tries < 400);
-    placed.push({ x, y });
-    s.fx = x / WORLD.width;
-    s.fy = y / WORLD.height;
-  });
+function weightedBgIndex() {
+  const r = Math.random() * 100;
+  let acc = 0;
+  for (let i = 0; i < BG_WEIGHTS.length; i++) {
+    acc += BG_WEIGHTS[i];
+    if (r < acc) return i;
+  }
+  return BG_WEIGHTS.length - 1;
+}
+
+let bgMap = [];
+function generateBackground() {
+  const map = [];
+  for (let r = 0; r < grid.rows; r++) {
+    const row = [];
+    for (let c = 0; c < grid.cols; c++) row.push(weightedBgIndex());
+    map.push(row);
+  }
+  return map;
+}
+
+function isTileFree(tx, ty) {
+  if (tx < 0 || tx >= grid.cols || ty < 0 || ty >= grid.rows) return false;
+  return !stations.some(s => s.tileX === tx && s.tileY === ty);
+}
+
+// Platziert alle Icons außerhalb der unteren reservierten Reihen, mit
+// garantiertem Mindestabstand zueinander. Statt reinem Zufalls-Sampling
+// (das bei kleinen Rastern hängen bleiben und zu eng platzierte Icons
+// erzeugen kann) wird die Liste aller erlaubten Felder gemischt und dann
+// deterministisch nach freien, ausreichend entfernten Feldern durchsucht.
+// Reicht der Platz beim gewünschten Abstand nicht für alle Icons, wird
+// der Abstand automatisch schrittweise verringert (nie einfach ignoriert).
+function placeIcons() {
+  const allowedRows = Math.max(1, grid.rows - BOTTOM_RESERVED_ROWS);
+  const allTiles = [];
+  for (let r = 0; r < allowedRows; r++)
+    for (let c = 0; c < grid.cols; c++) allTiles.push({ tx: c, ty: r });
+
+  // Fisher-Yates shuffle für eine zufällige, aber gleichmäßige Verteilung
+  for (let i = allTiles.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [allTiles[i], allTiles[j]] = [allTiles[j], allTiles[i]];
+  }
+
+  let gap = MIN_ICON_TILE_GAP;
+  let placed = [];
+  while (gap >= 0) {
+    placed = [];
+    let success = true;
+    for (const s of stations) {
+      const tile = allTiles.find(t =>
+        !placed.some(p => Math.max(Math.abs(p.tx - t.tx), Math.abs(p.ty - t.ty)) < gap)
+      );
+      if (!tile) { success = false; break; }
+      placed.push({ tx: tile.tx, ty: tile.ty, station: s });
+    }
+    if (success) break;
+    gap--; // Raster zu klein für den gewünschten Abstand -> Abstand verringern statt zu überlappen
+  }
+  placed.forEach(p => { p.station.tileX = p.tx; p.station.tileY = p.ty; });
+}
+
+function placePlayer() {
+  let tx = Math.floor(grid.cols / 2);
+  let ty = Math.floor(Math.max(1, grid.rows - BOTTOM_RESERVED_ROWS) / 2);
+  if (!isTileFree(tx, ty)) {
+    outer:
+    for (let radius = 1; radius < Math.max(grid.cols, grid.rows); radius++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = tx + dx, ny = ty + dy;
+          if (isTileFree(nx, ny)) { tx = nx; ty = ny; break outer; }
+        }
+      }
+    }
+  }
+  player.tileX = tx; player.tileY = ty;
+  player.moving = false; player.dir = 'down'; player.walkFrame = 0;
+}
+
+function regenerateWorld() {
+  bgMap = generateBackground();
+  placeIcons();
+  placePlayer();
 }
 
 /* ==========================================================
-   SPIELER-ZUSTAND (freie Pixelbewegung, kein Raster)
+   SPIELER-ZUSTAND — echte Kachel-Bewegung (ein Feld pro Schritt)
    ========================================================== */
-const player = { x: 0, y: 0, dir: "down", moving: false, frame: 0, lastFrameTime: 0 };
+const DIR_VECTORS = {
+  up:    { dx: 0, dy: -1 },
+  down:  { dx: 0, dy: 1 },
+  left:  { dx: -1, dy: 0 },
+  right: { dx: 1, dy: 0 },
+};
 
-const keys = {};
+const player = {
+  tileX: 0, tileY: 0,
+  fromTileX: 0, fromTileY: 0, toTileX: 0, toTileY: 0,
+  dir: "down", moving: false, moveStart: 0, walkFrame: 0,
+};
+
+// Richtungs-Stack: die zuletzt gedrückte Richtung gewinnt, so lässt sich
+// z.B. beim gleichzeitigen Halten zweier Tasten sauber umschalten.
+let dirStack = [];
+function setDirState(dir, pressed) {
+  if (pressed) { if (!dirStack.includes(dir)) dirStack.push(dir); }
+  else { dirStack = dirStack.filter(d => d !== dir); }
+}
+function currentDesiredDir() { return dirStack.length ? dirStack[dirStack.length - 1] : null; }
+
 let dialogOpen = false;
 let activeStation = null;
 
+const KEY_TO_DIR = {
+  arrowup: 'up', w: 'up',
+  arrowdown: 'down', s: 'down',
+  arrowleft: 'left', a: 'left',
+  arrowright: 'right', d: 'right',
+};
+
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
-  keys[k] = true;
+  if (KEY_TO_DIR[k]) setDirState(KEY_TO_DIR[k], true);
   if (dialogOpen && (k === "enter" || k === " ")) confirmAction();
   else if (dialogOpen && k === "escape") closeDialog();
   else if (!dialogOpen && k === "enter") pressA();
 });
-window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+window.addEventListener('keyup', (e) => {
+  const k = e.key.toLowerCase();
+  if (KEY_TO_DIR[k]) setDirState(KEY_TO_DIR[k], false);
+});
 
 function pressA() { tryInteract(); }
 function pressB() { if (dialogOpen) closeDialog(); }
 function confirmAction() { window.open(activeStation.url, "_blank"); closeDialog(); }
 
+// Interagiert nur mit dem Feld, dem der Spieler gerade zugewandt ist —
+// klassisches "davor stehen und A drücken".
 function tryInteract() {
-  let nearest = null, nearestDist = Infinity;
-  for (const s of stations) {
-    const sx = s.fx * WORLD.width, sy = s.fy * WORLD.height;
-    const d = Math.hypot(sx - player.x, sy - player.y);
-    if (d < INTERACT_RANGE && d < nearestDist) { nearest = s; nearestDist = d; }
-  }
-  if (nearest) { dialogOpen = true; activeStation = nearest; }
+  if (player.moving) return;
+  const v = DIR_VECTORS[player.dir];
+  const fx = player.tileX + v.dx, fy = player.tileY + v.dy;
+  const s = stations.find(st => st.tileX === fx && st.tileY === fy);
+  if (s) { dialogOpen = true; activeStation = s; }
 }
 function closeDialog() { dialogOpen = false; activeStation = null; }
 
@@ -260,123 +445,120 @@ function bindButton(id, onDown, onUp) {
   el.addEventListener('pointercancel', up);
   el.addEventListener('pointerleave', up);
 }
-bindButton('dpad-up',    () => keys['arrowup'] = true,    () => keys['arrowup'] = false);
-bindButton('dpad-down',  () => keys['arrowdown'] = true,  () => keys['arrowdown'] = false);
-bindButton('dpad-left',  () => keys['arrowleft'] = true,  () => keys['arrowleft'] = false);
-bindButton('dpad-right', () => keys['arrowright'] = true, () => keys['arrowright'] = false);
+bindButton('dpad-up',    () => setDirState('up', true),    () => setDirState('up', false));
+bindButton('dpad-down',  () => setDirState('down', true),  () => setDirState('down', false));
+bindButton('dpad-left',  () => setDirState('left', true),  () => setDirState('left', false));
+bindButton('dpad-right', () => setDirState('right', true), () => setDirState('right', false));
 bindButton('btn-a', () => { if (dialogOpen) confirmAction(); else pressA(); });
 bindButton('btn-b', () => { pressB(); });
 
 /* ==========================================================
-   BEWEGUNG — freie Vektorbewegung, achsengetrennte Kollision
-   (kann an Icons entlangrutschen statt hart stehen zu bleiben)
+   UPDATE — ein Kachel-Schritt nach dem anderen
    ========================================================== */
-function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
-  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
-}
-
-function collidesAt(x, y) {
-  const half = PLAYER_SIZE / 2;
-  for (const s of stations) {
-    const sx = s.fx * WORLD.width, sy = s.fy * WORLD.height;
-    const pad = 6; // kleiner Puffer, damit Icons nicht direkt "geklebt" wirken
-    if (rectsOverlap(
-      x - half, y - half, PLAYER_SIZE, PLAYER_SIZE,
-      sx - ICON_SIZE / 2 - pad, sy - ICON_SIZE / 2 - pad, ICON_SIZE + pad * 2, ICON_SIZE + pad * 2
-    )) return true;
-  }
-  return false;
-}
-
-let lastTime = 0;
 function update(t) {
-  const dt = Math.min(48, t - lastTime) / 1000;
-  lastTime = t;
-  if (dialogOpen) { player.moving = false; return; }
-
-  let dx = 0, dy = 0;
-  if (keys['arrowup'] || keys['w']) dy -= 1;
-  if (keys['arrowdown'] || keys['s']) dy += 1;
-  if (keys['arrowleft'] || keys['a']) dx -= 1;
-  if (keys['arrowright'] || keys['d']) dx += 1;
-
-  player.moving = (dx !== 0 || dy !== 0);
+  if (dialogOpen) return;
 
   if (player.moving) {
-    const len = Math.hypot(dx, dy);
-    dx /= len; dy /= len;
-
-    if (dy < 0) player.dir = 'up';
-    else if (dy > 0) player.dir = 'down';
-    else if (dx < 0) player.dir = 'left';
-    else if (dx > 0) player.dir = 'right';
-
-    const half = PLAYER_SIZE / 2;
-    const stepX = dx * SPEED * dt;
-    const stepY = dy * SPEED * dt;
-
-    let nx = player.x + stepX;
-    nx = Math.max(half, Math.min(WORLD.width - half, nx));
-    if (!collidesAt(nx, player.y)) player.x = nx;
-
-    let ny = player.y + stepY;
-    ny = Math.max(half, Math.min(WORLD.height - half, ny));
-    if (!collidesAt(player.x, ny)) player.y = ny;
-
-    if (t - player.lastFrameTime > ANIM_INTERVAL) {
-      player.frame = player.frame === 0 ? 1 : 0;
-      player.lastFrameTime = t;
+    const prog = Math.min(1, (t - player.moveStart) / MOVE_TIME);
+    if (prog >= 1) {
+      player.tileX = player.toTileX;
+      player.tileY = player.toTileY;
+      player.moving = false;
     }
-  } else {
-    player.frame = 0;
+    return;
   }
+
+  const dir = currentDesiredDir();
+  if (!dir) return;
+
+  player.dir = dir;
+  const v = DIR_VECTORS[dir];
+  const ntx = player.tileX + v.dx, nty = player.tileY + v.dy;
+  if (isTileFree(ntx, nty)) {
+    player.fromTileX = player.tileX; player.fromTileY = player.tileY;
+    player.toTileX = ntx; player.toTileY = nty;
+    player.moveStart = t;
+    player.moving = true;
+    player.walkFrame = player.walkFrame === 0 ? 1 : 0;
+  }
+  // Ist das Zielfeld blockiert, dreht sich der Charakter nur in die
+  // gewünschte Richtung, ohne sich zu bewegen.
 }
 
 /* ==========================================================
    RENDERING
    ========================================================== */
-function draw() {
-  if (images.background) ctx.drawImage(images.background, 0, 0, WORLD.width, WORLD.height);
-  else { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, WORLD.width, WORLD.height); }
-
-  stations.forEach(s => {
-    const sx = s.fx * WORLD.width, sy = s.fy * WORLD.height;
-    const img = images.stations[s.label];
-    if (img) ctx.drawImage(img, sx - ICON_SIZE / 2, sy - ICON_SIZE / 2, ICON_SIZE, ICON_SIZE);
-    else drawFallback(FALLBACK_ICON, sx, sy, ICON_SIZE);
-  });
-
-  const pFrames = images.player[player.dir];
-  const pImg = pFrames ? pFrames[player.frame] : null;
-  if (pImg) ctx.drawImage(pImg, player.x - PLAYER_SIZE / 2, player.y - PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
-  else drawFallback(FALLBACK_PLAYER, player.x, player.y, PLAYER_SIZE);
-
-  if (dialogOpen) {
-    const bw = Math.min(WORLD.width - 24, 420), bh = 56;
-    const bx = (WORLD.width - bw) / 2, by = WORLD.height - bh - 24;
-    ctx.fillStyle = "#fff"; ctx.fillRect(bx, by, bw, bh);
-    ctx.strokeStyle = "#000"; ctx.lineWidth = 3; ctx.strokeRect(bx, by, bw, bh);
-    ctx.fillStyle = "#000";
-    ctx.font = "12px 'Press Start 2P', monospace";
-    ctx.fillText(activeStation.label, bx + 14, by + 22);
-    ctx.font = "8px 'Press Start 2P', monospace";
-    ctx.fillText("a: öffnen   b: schließen", bx + 14, by + 40);
+function drawBackground() {
+  for (let r = 0; r < grid.rows; r++) {
+    for (let c = 0; c < grid.cols; c++) {
+      const idx = bgMap[r] ? bgMap[r][c] : 0;
+      const img = images.background[idx];
+      const x = c * grid.tileSize, y = r * grid.tileSize;
+      if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
+      else { ctx.fillStyle = idx % 2 === 0 ? "#f4f4f4" : "#eaeaea"; ctx.fillRect(x, y, grid.tileSize, grid.tileSize); }
+    }
   }
+}
+
+function drawIcons() {
+  stations.forEach(s => {
+    const x = s.tileX * grid.tileSize, y = s.tileY * grid.tileSize;
+    const img = images.icons[s.icon];
+    if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
+    else drawFallback(FALLBACK_ICON, x + grid.tileSize / 2, y + grid.tileSize / 2, grid.tileSize);
+  });
+}
+
+function drawPlayer(t) {
+  let tx = player.tileX, ty = player.tileY;
+  if (player.moving) {
+    const prog = Math.min(1, (t - player.moveStart) / MOVE_TIME);
+    tx = player.fromTileX + (player.toTileX - player.fromTileX) * prog;
+    ty = player.fromTileY + (player.toTileY - player.fromTileY) * prog;
+  }
+  const x = tx * grid.tileSize, y = ty * grid.tileSize;
+  const frames = images.player[player.dir];
+  const img = frames ? (player.moving ? (player.walkFrame === 0 ? frames.r : frames.l) : frames.stand) : null;
+  if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
+  else drawFallback(FALLBACK_PLAYER, x + grid.tileSize / 2, y + grid.tileSize / 2, grid.tileSize);
+}
+
+function drawDialog() {
+  const bw = Math.min(grid.width - 24, 420), bh = 56;
+  const bx = (grid.width - bw) / 2;
+  const by = grid.height - grid.tileSize * BOTTOM_RESERVED_ROWS - bh - 12;
+  ctx.fillStyle = "#fff"; ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = "#000"; ctx.lineWidth = 3; ctx.strokeRect(bx, by, bw, bh);
+  ctx.fillStyle = "#000";
+  ctx.font = "12px 'Press Start 2P', monospace";
+  ctx.fillText(activeStation.label, bx + 14, by + 22);
+  ctx.font = "8px 'Press Start 2P', monospace";
+  ctx.fillText("a: öffnen   b: schließen", bx + 14, by + 40);
+}
+
+function draw(t) {
+  drawBackground();
+  drawIcons();
+  drawPlayer(t);
+  if (dialogOpen) drawDialog();
 }
 
 function loop(t) {
   update(t);
-  draw();
+  draw(t);
   requestAnimationFrame(loop);
 }
 
 /* ==========================================================
-   RESPONSIVE — Spielfläche füllt immer den ganzen Bildschirm
+   RESPONSIVE — Kachelgröße = Bildschirmhöhe / TARGET_ROWS.
+   Ändert sich dadurch die Anzahl der Spalten/Reihen (z.B. durch
+   Drehen des Geräts), wird die Welt neu generiert; bei einer bloßen
+   Fenstergrößen-Änderung ohne Raster-Änderung bleiben Hintergrund,
+   Icon- und Spielerposition (in Kachel-Koordinaten) unverändert.
    ========================================================== */
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth, h = window.innerHeight;
-  const oldW = WORLD.width, oldH = WORLD.height;
 
   canvas.width = w * dpr;
   canvas.height = h * dpr;
@@ -385,21 +567,29 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
 
-  WORLD.width = w; WORLD.height = h;
+  // Grobe Kachelgröße aus der Gesamtfläche schätzen, dann Spalten/Reihen
+  // darauf runden und auf 6–12 pro Seite begrenzen.
+  const roughTileSize = Math.sqrt((w * h) / TARGET_TILE_COUNT);
+  const cols = clamp(Math.round(w / roughTileSize), MIN_TILES_PER_SIDE, MAX_TILES_PER_SIDE);
+  const rows = clamp(Math.round(h / roughTileSize), MIN_TILES_PER_SIDE, MAX_TILES_PER_SIDE);
+  // Kachelgröße final aus Breite und Höhe mitteln, damit die Kacheln nahezu
+  // quadratisch bleiben (die 32x32-Bilder werden nicht verzerrt).
+  const tileSize = (w / cols + h / rows) / 2;
+  // Mit dieser finalen (quadratischen) Kachelgröße Spalten/Reihen so
+  // aufrunden, dass Hintergrund und Grid den Screen lückenlos abdecken
+  // (kann am Rand minimal überstehen, wird vom Canvas einfach abgeschnitten).
+  const finalCols = Math.ceil(w / tileSize);
+  const finalRows = Math.ceil(h / tileSize);
 
-  if (oldW && oldH) {
-    // Spielerposition proportional mitskalieren statt hart zu verschieben
-    player.x = player.x * (w / oldW);
-    player.y = player.y * (h / oldH);
-  } else {
-    player.x = w / 2; player.y = h / 2;
-  }
+  const gridChanged = (finalCols !== grid.cols || finalRows !== grid.rows);
+  grid = { cols: finalCols, rows: finalRows, tileSize, width: w, height: h };
+
+  if (gridChanged) regenerateWorld();
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', resize);
 
 resize();
-distributeStations();
 loadAssets().then(() => requestAnimationFrame(loop));
 </script>
 </body>
