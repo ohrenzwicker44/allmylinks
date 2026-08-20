@@ -27,22 +27,23 @@
     background:#fff; color:#000; font-size:0.7rem;
   }
 
-  /* ===== Pixel-Style Bedienoberfläche — immer sichtbar ===== */
+  /* ===== Bedienoberfläche — immer sichtbar, feste Höhe (siehe
+     CONTROL_AREA_HEIGHT im Script, beide Werte im Sync halten) ===== */
   #controls{
     position:fixed; left:0; right:0; bottom:0;
-    display:flex; justify-content:space-between; align-items:flex-end;
-    padding: 0 16px 16px;
+    height:150px;
+    display:flex; justify-content:space-between; align-items:center;
+    padding: 0 20px;
     pointer-events:none;
     z-index:10;
   }
   .pixel-btn{
     background:#fff; color:#000;
-    border:3px solid #000;
+    border:2px solid #000;
     font-family:'Press Start 2P', monospace;
-    font-size:0.9rem;
+    font-size:0.85rem;
     display:flex; align-items:center; justify-content:center;
     user-select:none; pointer-events:auto;
-    clip-path: polygon(25% 0%, 75% 0%, 100% 25%, 100% 75%, 75% 100%, 25% 100%, 0% 75%, 0% 25%);
     overflow:hidden;
   }
   .pixel-btn.pressed{ background:#000; color:#fff; }
@@ -54,11 +55,26 @@
     pointer-events:none;
   }
 
+  /* Steuerkreuz: quadratische, leicht abgerundete Tasten. Die Pfeile
+     bestehen aus reinem CSS (border-Trick), nicht aus Unicode-Zeichen —
+     dadurch sehen sie auf jedem Gerät/Betriebssystem identisch aus.
+     (Unicode-Pfeile wie ▲◀▶▼ werden z.B. auf iOS teils als bunte Emojis
+     gerendert und ignorieren dann die CSS-Farbe — daher der Wechsel.) */
+  .dpad-btn{ border-radius:6px; }
+  .arrow{ width:0; height:0; pointer-events:none; }
+  .arrow-up{    border-left:7px solid transparent; border-right:7px solid transparent; border-bottom:12px solid currentColor; }
+  .arrow-down{  border-left:7px solid transparent; border-right:7px solid transparent; border-top:12px solid currentColor; }
+  .arrow-left{  border-top:7px solid transparent;  border-bottom:7px solid transparent; border-right:12px solid currentColor; }
+  .arrow-right{ border-top:7px solid transparent;  border-bottom:7px solid transparent; border-left:12px solid currentColor; }
+
+  /* A/B: runde, Gameboy-typische Aktionstasten */
+  .ab-btn{ border-radius:50%; }
+
   .pad{
     display:grid;
     grid-template-columns: 44px 44px 44px;
     grid-template-rows: 44px 44px 44px;
-    gap:3px;
+    gap:2px;
   }
   #dpad-up{grid-column:2; grid-row:1;}
   #dpad-left{grid-column:1; grid-row:2;}
@@ -82,14 +98,14 @@
 
 <div id="controls">
   <div class="pad">
-    <button class="pixel-btn" id="dpad-up">▲</button>
-    <button class="pixel-btn" id="dpad-left">◀</button>
-    <button class="pixel-btn" id="dpad-right">▶</button>
-    <button class="pixel-btn" id="dpad-down">▼</button>
+    <button class="pixel-btn dpad-btn" id="dpad-up"><span class="arrow arrow-up"></span></button>
+    <button class="pixel-btn dpad-btn" id="dpad-left"><span class="arrow arrow-left"></span></button>
+    <button class="pixel-btn dpad-btn" id="dpad-right"><span class="arrow arrow-right"></span></button>
+    <button class="pixel-btn dpad-btn" id="dpad-down"><span class="arrow arrow-down"></span></button>
   </div>
   <div class="abpad">
-    <button class="pixel-btn" id="btn-b">B</button>
-    <button class="pixel-btn" id="btn-a">A</button>
+    <button class="pixel-btn ab-btn" id="btn-b">B</button>
+    <button class="pixel-btn ab-btn" id="btn-a">A</button>
   </div>
 </div>
 
@@ -99,17 +115,15 @@
    ========================================================== */
 
 // Zielgröße des Rasters: insgesamt ungefähr TARGET_TILE_COUNT Kacheln,
-// aufgeteilt nach Seitenverhältnis des Bildschirms, aber jede Seite
-// (Spalten/Reihen) auf 6–12 Kacheln begrenzt. Ein breiter Screen landet
-// also z.B. bei ~12x6, ein hoher bei ~6x12, ein quadratischer bei ~8x8 —
-// macht in Summe ungefähr 50–100 Kacheln, egal wie das Gerät geformt ist.
+// aufgeteilt nach Seitenverhältnis des verfügbaren Spielbereichs (siehe
+// unten), aber jede Seite (Spalten/Reihen) auf 6–12 Kacheln begrenzt.
 const TARGET_TILE_COUNT = 70;
 const MIN_TILES_PER_SIDE = 6;
 const MAX_TILES_PER_SIDE = 12;
 
-// Die untersten X Kachel-Reihen sind für Icons tabu (dort liegen die
-// Bedienelemente). Der Spieler darf dort trotzdem laufen.
-const BOTTOM_RESERVED_ROWS = 2;
+// Ungefähre Höhe der Bedienelemente in px — bestimmt, wie groß der freie
+// Rand oben/unten ungefähr sein soll. Muss zur #controls-Höhe im CSS passen.
+const CONTROL_AREA_HEIGHT = 150;
 
 // Mindestabstand zwischen zwei Icons, gemessen in Kacheln (Chebyshev-Distanz).
 // 2 bedeutet: zwischen zwei Icons liegt immer mindestens ein freies Feld.
@@ -122,15 +136,25 @@ function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 // tatsächlichen Pixelgröße der Kacheln).
 const MOVE_TIME = 320;
 // Dauer, nach der beim Laufen zwischen "_l" und "_r" gewechselt wird.
-// Bei MOVE_TIME/2 sieht man während EINES Kachel-Schritts beide Bilder
-// einmal — bei einem größeren Teiler (z.B. MOVE_TIME/3) öfter.
 const WALK_FRAME_TIME = MOVE_TIME / 2;
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
-// Aktueller Grid-Zustand, wird bei jedem Resize neu berechnet
-let grid = { cols: 0, rows: 0, tileSize: 0, width: 0, height: 0 };
+// Aktueller Grid-Zustand, wird bei jedem Resize neu berechnet.
+// yOffset/barHeight = Höhe des freien Rands oben (= unten, exakt gleich groß).
+let grid = { cols: 0, rows: 0, tileSize: 0, width: 0, height: 0, yOffset: 0, barHeight: 0 };
+
+/* ==========================================================
+   TEXTE — hier zentral änderbar (z.B. für eine andere Sprache
+   oder einen anderen Titel).
+   ========================================================== */
+const UI_TEXT = {
+  // Text, der zentriert im oberen Rand steht
+  title: "ludo_links",
+  // Hinweistext im Dialogfenster, erscheint bei jedem Icon gleich
+  interactHint: "A: öffnen   B: schließen",
+};
 
 /* ==========================================================
    ASSETS
@@ -145,10 +169,6 @@ let grid = { cols: 0, rows: 0, tileSize: 0, width: 0, height: 0 };
      left_stand.png     left_walk_l.png     left_walk_r.png
      right_stand.png    right_walk_l.png    right_walk_r.png
 
-   Verwendung: steht der Charakter still, wird "_stand" der aktuellen
-   Blickrichtung gezeigt. Läuft er, wechseln "_walk_l" und "_walk_r"
-   bei jedem Kachel-Schritt ab.
-
    ICONS — feste Dateinamen:
      icon_instagram.png
      icon_beatstars.png
@@ -157,15 +177,13 @@ let grid = { cols: 0, rows: 0, tileSize: 0, width: 0, height: 0 };
      icon_spotify.png
      icon_youtube.png
 
-   HINTERGRUND — 5 Kachel-Varianten, werden zufällig gemischt:
-     background_1.png (30%)
-     background_2.png (20%)
-     background_3.png (20%)
-     background_4.png (20%)
-     background_5.png (10%)
+   HINTERGRUND — 5 Kachel-Varianten, werden zufällig gemischt
+   (Gewichtung siehe BG_WEIGHTS weiter unten):
+     background_1.png / background_2.png / background_3.png /
+     background_4.png / background_5.png
 
    STEUERELEMENTE (optional — fehlen sie, bleiben die aktuellen
-   Pfeil-/Buchstaben-Buttons einfach bestehen):
+   CSS-Buttons mit Pfeil-Dreiecken/Buchstaben einfach bestehen):
      btn_up.png    btn_down.png    btn_left.png    btn_right.png
      btn_a.png     btn_b.png
    ========================================================== */
@@ -197,17 +215,22 @@ const ASSET_PATHS = {
 const BG_WEIGHTS = [50, 20, 30, 0, 0];
 
 /* ==========================================================
-   HIER DEINE LINKS EINTRAGEN
-   Jede Station braucht: label (Anzeigename im Dialog),
-   icon (muss zu "icon_<icon>.png" passen) und url (Ziel-Link).
+   HIER DEINE LINKS (UND TEXTE) EINTRAGEN
+   Jede Station braucht:
+     label - Anzeigename, wird als Standardtext im Dialog verwendet
+     icon  - muss zu "icon_<icon>.png" passen
+     url   - Ziel-Link, öffnet sich bei Bestätigung mit A
+     text  - eigener Text fürs Dialogfeld, z.B. "Hör mal in meinen
+             neuen Track rein!". Leer lassen (""), um stattdessen
+             einfach "label" als Standardtext zu zeigen.
    ========================================================== */
 const stations = [
-  { label: "instagram",  icon: "instagram",  url: "https://www.instagram.com/affeimgruenenauto/" },
-  { label: "beatstars",  icon: "beatstars",  url: "https://www.beatstars.com/icedoutfinn" },
-  { label: "moxfield",   icon: "moxfield",   url: "https://moxfield.com/users/ohrenzwickerlein44" },
-  { label: "soundcloud", icon: "soundcloud", url: "https://soundcloud.com/finn-schindele" },
-  { label: "spotify",    icon: "spotify",    url: "https://open.spotify.com/intl-de/artist/1olhqVu0Dx8g0ome7BIq7D?si=5OpyHOi0RH-7D64V_i4OCg" },
-  { label: "youtube",    icon: "youtube",    url: "https://youtube.com/@deinhandle" },
+  { label: "instagram",  icon: "instagram",  url: "https://www.instagram.com/affeimgruenenauto/", text: "" },
+  { label: "beatstars",  icon: "beatstars",  url: "https://www.beatstars.com/icedoutfinn", text: "" },
+  { label: "moxfield",   icon: "moxfield",   url: "https://moxfield.com/users/ohrenzwickerlein44", text: "" },
+  { label: "soundcloud", icon: "soundcloud", url: "https://soundcloud.com/finn-schindele", text: "" },
+  { label: "spotify",    icon: "spotify",    url: "https://open.spotify.com/intl-de/artist/1olhqVu0Dx8g0ome7BIq7D?si=5OpyHOi0RH-7D64V_i4OCg", text: "" },
+  { label: "youtube",    icon: "youtube",    url: "https://youtube.com/@deinhandle", text: "" },
 ];
 
 /* ==========================================================
@@ -245,7 +268,7 @@ function loadImage(path) {
 }
 
 // Setzt ein eigenes Bild als Button-Inhalt, falls es geladen werden konnte.
-// Fehlt die Datei, bleibt der bisherige Pfeil/Buchstabe als Fallback stehen.
+// Fehlt die Datei, bleiben die bisherigen CSS-Pfeile/Buchstaben als Fallback.
 function applyButtonImage(id, img) {
   if (!img) return;
   const el = document.getElementById(id);
@@ -312,20 +335,17 @@ function isTileFree(tx, ty) {
   return !stations.some(s => s.tileX === tx && s.tileY === ty);
 }
 
-// Platziert alle Icons außerhalb der unteren reservierten Reihen, mit
-// garantiertem Mindestabstand zueinander. Statt reinem Zufalls-Sampling
-// (das bei kleinen Rastern hängen bleiben und zu eng platzierte Icons
-// erzeugen kann) wird die Liste aller erlaubten Felder gemischt und dann
-// deterministisch nach freien, ausreichend entfernten Feldern durchsucht.
-// Reicht der Platz beim gewünschten Abstand nicht für alle Icons, wird
-// der Abstand automatisch schrittweise verringert (nie einfach ignoriert).
+// Platziert alle Icons mit garantiertem Mindestabstand zueinander (Icons
+// dürfen jetzt im ganzen Raster liegen — die Bedienelemente sitzen im
+// eigenen Rand außerhalb des Spielfelds, es braucht also keine tabu-Reihen
+// mehr wie in der Vorversion). Statt reinem Zufalls-Sampling wird die
+// Liste aller Felder gemischt und dann deterministisch nach freien,
+// ausreichend entfernten Feldern durchsucht.
 function placeIcons() {
-  const allowedRows = Math.max(1, grid.rows - BOTTOM_RESERVED_ROWS);
   const allTiles = [];
-  for (let r = 0; r < allowedRows; r++)
+  for (let r = 0; r < grid.rows; r++)
     for (let c = 0; c < grid.cols; c++) allTiles.push({ tx: c, ty: r });
 
-  // Fisher-Yates shuffle für eine zufällige, aber gleichmäßige Verteilung
   for (let i = allTiles.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [allTiles[i], allTiles[j]] = [allTiles[j], allTiles[i]];
@@ -351,7 +371,7 @@ function placeIcons() {
 
 function placePlayer() {
   let tx = Math.floor(grid.cols / 2);
-  let ty = Math.floor(Math.max(1, grid.rows - BOTTOM_RESERVED_ROWS) / 2);
+  let ty = Math.floor(grid.rows / 2);
   if (!isTileFree(tx, ty)) {
     outer:
     for (let radius = 1; radius < Math.max(grid.cols, grid.rows); radius++) {
@@ -389,8 +409,6 @@ const player = {
   dir: "down", moving: false, moveStart: 0,
 };
 
-// Richtungs-Stack: die zuletzt gedrückte Richtung gewinnt, so lässt sich
-// z.B. beim gleichzeitigen Halten zweier Tasten sauber umschalten.
 let dirStack = [];
 function setDirState(dir, pressed) {
   if (pressed) { if (!dirStack.includes(dir)) dirStack.push(dir); }
@@ -424,8 +442,6 @@ function pressA() { tryInteract(); }
 function pressB() { if (dialogOpen) closeDialog(); }
 function confirmAction() { window.open(activeStation.url, "_blank"); closeDialog(); }
 
-// Interagiert nur mit dem Feld, dem der Spieler gerade zugewandt ist —
-// klassisches "davor stehen und A drücken".
 function tryInteract() {
   if (player.moving) return;
   const v = DIR_VECTORS[player.dir];
@@ -484,19 +500,37 @@ function update(t) {
     player.moveStart = t;
     player.moving = true;
   }
-  // Ist das Zielfeld blockiert, dreht sich der Charakter nur in die
-  // gewünschte Richtung, ohne sich zu bewegen.
 }
 
 /* ==========================================================
    RENDERING
    ========================================================== */
+
+// Bricht einen Text in Zeilen um, die maximal maxWidth breit sind
+// (ctx.font muss vorher gesetzt sein).
+function wrapText(context, text, maxWidth) {
+  const words = text.split(' ');
+  const lines = [];
+  let current = '';
+  for (const w of words) {
+    const test = current ? current + ' ' + w : w;
+    if (context.measureText(test).width > maxWidth && current) {
+      lines.push(current);
+      current = w;
+    } else {
+      current = test;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
 function drawBackground() {
   for (let r = 0; r < grid.rows; r++) {
     for (let c = 0; c < grid.cols; c++) {
       const idx = bgMap[r] ? bgMap[r][c] : 0;
       const img = images.background[idx];
-      const x = c * grid.tileSize, y = r * grid.tileSize;
+      const x = c * grid.tileSize, y = r * grid.tileSize + grid.yOffset;
       if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
       else { ctx.fillStyle = idx % 2 === 0 ? "#f4f4f4" : "#eaeaea"; ctx.fillRect(x, y, grid.tileSize, grid.tileSize); }
     }
@@ -505,7 +539,7 @@ function drawBackground() {
 
 function drawIcons() {
   stations.forEach(s => {
-    const x = s.tileX * grid.tileSize, y = s.tileY * grid.tileSize;
+    const x = s.tileX * grid.tileSize, y = s.tileY * grid.tileSize + grid.yOffset;
     const img = images.icons[s.icon];
     if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
     else drawFallback(FALLBACK_ICON, x + grid.tileSize / 2, y + grid.tileSize / 2, grid.tileSize);
@@ -519,35 +553,64 @@ function drawPlayer(t) {
     tx = player.fromTileX + (player.toTileX - player.fromTileX) * prog;
     ty = player.fromTileY + (player.toTileY - player.fromTileY) * prog;
   }
-  const x = tx * grid.tileSize, y = ty * grid.tileSize;
+  const x = tx * grid.tileSize, y = ty * grid.tileSize + grid.yOffset;
   const frames = images.player[player.dir];
-  // Zeitbasierte Umschaltung: solange sich der Charakter bewegt, wird alle
-  // WALK_FRAME_TIME ms zwischen "_l" und "_r" gewechselt — durchgehend,
-  // auch über mehrere aneinandergereihte Kachel-Schritte hinweg (also
-  // wirklich l, r, l, r, l, r, ... statt nur ein Bild pro Kachel).
   const walkPhase = Math.floor(t / WALK_FRAME_TIME) % 2;
   const img = frames ? (player.moving ? (walkPhase === 0 ? frames.l : frames.r) : frames.stand) : null;
   if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
   else drawFallback(FALLBACK_PLAYER, x + grid.tileSize / 2, y + grid.tileSize / 2, grid.tileSize);
 }
 
+// Zentrierter Titel im oberen Rand
+function drawTopBar() {
+  ctx.fillStyle = "#000";
+  ctx.font = "10px 'Press Start 2P', monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(UI_TEXT.title, grid.width / 2, grid.barHeight / 2);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
 function drawDialog() {
-  const bw = Math.min(grid.width - 24, 420), bh = 56;
+  const maxW = Math.min(grid.width - 24, 420);
+  const paddingX = 14, paddingY = 14, lineHeight = 14, hintGap = 10, hintLineHeight = 11;
+
+  ctx.font = "10px 'Press Start 2P', monospace";
+  const mainText = (activeStation.text && activeStation.text.trim()) ? activeStation.text.trim() : activeStation.label;
+  const lines = wrapText(ctx, mainText, maxW - paddingX * 2);
+
+  ctx.font = "8px 'Press Start 2P', monospace";
+  const hintLines = wrapText(ctx, UI_TEXT.interactHint, maxW - paddingX * 2);
+
+  const bw = maxW;
+  const bh = paddingY * 2 + lines.length * lineHeight + hintGap + hintLines.length * hintLineHeight;
   const bx = (grid.width - bw) / 2;
-  const by = grid.height - grid.tileSize * BOTTOM_RESERVED_ROWS - bh - 12;
+  const gridBottom = grid.height - grid.barHeight; // untere Kante des Spielfelds (= Rand-Beginn)
+  const by = gridBottom - bh - 12;
+
   ctx.fillStyle = "#fff"; ctx.fillRect(bx, by, bw, bh);
   ctx.strokeStyle = "#000"; ctx.lineWidth = 3; ctx.strokeRect(bx, by, bw, bh);
   ctx.fillStyle = "#000";
-  ctx.font = "12px 'Press Start 2P', monospace";
-  ctx.fillText(activeStation.label, bx + 14, by + 22);
+
+  ctx.font = "10px 'Press Start 2P', monospace";
+  lines.forEach((line, i) => ctx.fillText(line, bx + paddingX, by + paddingY + (i + 1) * lineHeight - 4));
+
   ctx.font = "8px 'Press Start 2P', monospace";
-  ctx.fillText("a: öffnen   b: schließen", bx + 14, by + 40);
+  const hintStartY = by + paddingY + lines.length * lineHeight + hintGap;
+  hintLines.forEach((line, i) => ctx.fillText(line, bx + paddingX, hintStartY + i * hintLineHeight));
 }
 
 function draw(t) {
+  // Kompletten Canvas jeden Frame weiß löschen — der obere/untere Rand
+  // bleibt dadurch automatisch leer/weiß, ohne separat gezeichnet zu werden.
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, grid.width, grid.height);
+
   drawBackground();
   drawIcons();
   drawPlayer(t);
+  drawTopBar();
   if (dialogOpen) drawDialog();
 }
 
@@ -558,11 +621,13 @@ function loop(t) {
 }
 
 /* ==========================================================
-   RESPONSIVE — Kachelgröße = Bildschirmhöhe / TARGET_ROWS.
-   Ändert sich dadurch die Anzahl der Spalten/Reihen (z.B. durch
-   Drehen des Geräts), wird die Welt neu generiert; bei einer bloßen
-   Fenstergrößen-Änderung ohne Raster-Änderung bleiben Hintergrund,
-   Icon- und Spielerposition (in Kachel-Koordinaten) unverändert.
+   RESPONSIVE — oben und unten bleibt ein Rand frei, der ungefähr
+   so groß ist wie die Bedienelemente (CONTROL_AREA_HEIGHT), an das
+   Bildschirmformat angepasst (relativ zur Höhe geklammert). Das
+   Kachelraster (6–12 pro Seite, ~50–100 gesamt) wird aus der
+   verbleibenden Höhe berechnet, und der tatsächliche Rand ergibt
+   sich anschließend aus dem Rest — dadurch ist das Spielfeld immer
+   exakt vertikal zentriert, ohne dass eine Kachel abgeschnitten wird.
    ========================================================== */
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -575,22 +640,24 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
 
-  // Grobe Kachelgröße aus der Gesamtfläche schätzen, dann Spalten/Reihen
-  // darauf runden und auf 6–12 pro Seite begrenzen.
-  const roughTileSize = Math.sqrt((w * h) / TARGET_TILE_COUNT);
+  // Zielrand: ungefähr CONTROL_AREA_HEIGHT groß, aber auf sehr flachen
+  // Screens nicht zu dominant und auf sehr hohen nicht zu winzig.
+  const targetBar = clamp(CONTROL_AREA_HEIGHT, h * 0.12, h * 0.22);
+  const availableHeight = Math.max(h * 0.4, h - targetBar * 2);
+
+  const roughTileSize = Math.sqrt((w * availableHeight) / TARGET_TILE_COUNT);
   const cols = clamp(Math.round(w / roughTileSize), MIN_TILES_PER_SIDE, MAX_TILES_PER_SIDE);
-  const rows = clamp(Math.round(h / roughTileSize), MIN_TILES_PER_SIDE, MAX_TILES_PER_SIDE);
-  // Kachelgröße final aus Breite und Höhe mitteln, damit die Kacheln nahezu
-  // quadratisch bleiben (die 32x32-Bilder werden nicht verzerrt).
-  const tileSize = (w / cols + h / rows) / 2;
-  // Mit dieser finalen (quadratischen) Kachelgröße Spalten/Reihen so
-  // aufrunden, dass Hintergrund und Grid den Screen lückenlos abdecken
-  // (kann am Rand minimal überstehen, wird vom Canvas einfach abgeschnitten).
+  const rows = clamp(Math.round(availableHeight / roughTileSize), MIN_TILES_PER_SIDE, MAX_TILES_PER_SIDE);
+  const tileSize = (w / cols + availableHeight / rows) / 2;
+
   const finalCols = Math.ceil(w / tileSize);
-  const finalRows = Math.ceil(h / tileSize);
+  const finalRows = Math.round(availableHeight / tileSize);
+
+  // Tatsächlicher Rand = Rest, der nach dem Kacheln übrig bleibt.
+  const barHeight = (h - finalRows * tileSize) / 2;
 
   const gridChanged = (finalCols !== grid.cols || finalRows !== grid.rows);
-  grid = { cols: finalCols, rows: finalRows, tileSize, width: w, height: h };
+  grid = { cols: finalCols, rows: finalRows, tileSize, width: w, height: h, yOffset: barHeight, barHeight };
 
   if (gridChanged) regenerateWorld();
 }
