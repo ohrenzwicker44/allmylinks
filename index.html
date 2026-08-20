@@ -156,6 +156,12 @@ const UI_TEXT = {
   interactHint: "A: öffnen   B: schließen",
 };
 
+// Farbe des oberen/unteren Rands und der Schrift darin (auch der Titel
+// oben verwendet BAR_TEXT_COLOR). Jeder gültige CSS-Farbwert geht,
+// z.B. auch "#f5c400" oder "rgb(20,20,20)".
+const BAR_COLOR = "#ffffff";
+const BAR_TEXT_COLOR = "#000000";
+
 /* ==========================================================
    ASSETS
 
@@ -563,7 +569,7 @@ function drawPlayer(t) {
 
 // Zentrierter Titel im oberen Rand
 function drawTopBar() {
-  ctx.fillStyle = "#000";
+  ctx.fillStyle = BAR_TEXT_COLOR;
   ctx.font = "10px 'Press Start 2P', monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -602,9 +608,10 @@ function drawDialog() {
 }
 
 function draw(t) {
-  // Kompletten Canvas jeden Frame weiß löschen — der obere/untere Rand
-  // bleibt dadurch automatisch leer/weiß, ohne separat gezeichnet zu werden.
-  ctx.fillStyle = "#fff";
+  // Kompletten Canvas jeden Frame in BAR_COLOR löschen — der obere/untere
+  // Rand bleibt dadurch automatisch in dieser Farbe, ohne separat
+  // gezeichnet zu werden (das Spielfeld wird direkt danach darüber gemalt).
+  ctx.fillStyle = BAR_COLOR;
   ctx.fillRect(0, 0, grid.width, grid.height);
 
   drawBackground();
