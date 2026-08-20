@@ -129,6 +129,13 @@ const CONTROL_AREA_HEIGHT = 150;
 // 2 bedeutet: zwischen zwei Icons liegt immer mindestens ein freies Feld.
 const MIN_ICON_TILE_GAP = 2;
 
+// Die rechte(n) Spalte(n) sind eine unsichtbare Wand: dort kann der
+// Charakter nicht hinlaufen und es spawnen keine Icons. Das behebt einen
+// Rundungseffekt, durch den das Raster rechts leicht über den sichtbaren
+// Bildschirm hinausragen kann (Math.ceil beim Spalten-Runden weiter unten) —
+// ohne diese Wand könnte man in diese (teils unsichtbare) Spalte hineinlaufen.
+const RIGHT_WALL_COLS = 1;
+
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
 // Dauer eines einzelnen Kachel-Schritts in Millisekunden (klassische
@@ -159,8 +166,8 @@ const UI_TEXT = {
 // Farbe des oberen/unteren Rands und der Schrift darin (auch der Titel
 // oben verwendet BAR_TEXT_COLOR). Jeder gültige CSS-Farbwert geht,
 // z.B. auch "#f5c400" oder "rgb(20,20,20)".
-const BAR_COLOR = "#000000";
-const BAR_TEXT_COLOR = "#FFFFFF";
+const BAR_COLOR = "#ffffff";
+const BAR_TEXT_COLOR = "#000000";
 
 /* ==========================================================
    ASSETS
@@ -188,6 +195,13 @@ const BAR_TEXT_COLOR = "#FFFFFF";
      background_1.png / background_2.png / background_3.png /
      background_4.png / background_5.png
 
+   WAND — die rechte(n) Spalte(n) (siehe RIGHT_WALL_COLS) sind für den
+   Charakter gesperrt und bekommen statt eines normalen Hintergrunds
+   immer dieses eine Bild, z.B. ein Vorhang-Motiv:
+     background_right.png (optional — fehlt sie, wird stattdessen ein
+     einfaches gestreiftes Muster gezeichnet, die Wand bleibt trotzdem
+     immer gesperrt, unabhängig davon ob die Grafik vorhanden ist)
+
    STEUERELEMENTE (optional — fehlen sie, bleiben die aktuellen
    CSS-Buttons mit Pfeil-Dreiecken/Buchstaben einfach bestehen):
      btn_up.png    btn_down.png    btn_left.png    btn_right.png
@@ -207,6 +221,7 @@ const ASSET_PATHS = {
     "assets/background_4.png",
     "assets/background_5.png",
   ],
+  backgroundRight: "assets/background_right.png",
   controls: {
     up:    "assets/btn_up.png",
     down:  "assets/btn_down.png",
@@ -284,7 +299,7 @@ function applyButtonImage(id, img) {
   el.appendChild(im);
 }
 
-const images = { player: {}, icons: {}, background: [] };
+const images = { player: {}, icons: {}, background: [], backgroundRight: null };
 
 async function loadAssets() {
   for (const dir of ["down", "up", "left", "right"]) {
@@ -301,6 +316,7 @@ async function loadAssets() {
   for (const path of ASSET_PATHS.background) {
     images.background.push(await loadImage(path));
   }
+  images.backgroundRight = await loadImage(ASSET_PATHS.backgroundRight);
   const c = ASSET_PATHS.controls;
   applyButtonImage('dpad-up', await loadImage(c.up));
   applyButtonImage('dpad-down', await loadImage(c.down));
@@ -338,6 +354,7 @@ function generateBackground() {
 
 function isTileFree(tx, ty) {
   if (tx < 0 || tx >= grid.cols || ty < 0 || ty >= grid.rows) return false;
+  if (tx >= grid.cols - RIGHT_WALL_COLS) return false; // rechte Wand-Spalte(n)
   return !stations.some(s => s.tileX === tx && s.tileY === ty);
 }
 
@@ -350,7 +367,7 @@ function isTileFree(tx, ty) {
 function placeIcons() {
   const allTiles = [];
   for (let r = 0; r < grid.rows; r++)
-    for (let c = 0; c < grid.cols; c++) allTiles.push({ tx: c, ty: r });
+    for (let c = 0; c < grid.cols - RIGHT_WALL_COLS; c++) allTiles.push({ tx: c, ty: r });
 
   for (let i = allTiles.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -376,7 +393,7 @@ function placeIcons() {
 }
 
 function placePlayer() {
-  let tx = Math.floor(grid.cols / 2);
+  let tx = Math.min(Math.floor(grid.cols / 2), grid.cols - RIGHT_WALL_COLS - 1);
   let ty = Math.floor(grid.rows / 2);
   if (!isTileFree(tx, ty)) {
     outer:
@@ -534,9 +551,32 @@ function wrapText(context, text, maxWidth) {
 function drawBackground() {
   for (let r = 0; r < grid.rows; r++) {
     for (let c = 0; c < grid.cols; c++) {
+      const x = c * grid.tileSize, y = r * grid.tileSize + grid.yOffset;
+
+      if (c >= grid.cols - RIGHT_WALL_COLS) {
+        // Wand-Spalte: eigenes Bild (z.B. Vorhang) oder ersatzweise ein
+        // gestreiftes Muster, damit die Sperre auch ohne Grafik erkennbar ist.
+        if (images.backgroundRight) {
+          ctx.drawImage(images.backgroundRight, x, y, grid.tileSize, grid.tileSize);
+        } else {
+          ctx.fillStyle = "#2a2a2a";
+          ctx.fillRect(x, y, grid.tileSize, grid.tileSize);
+          ctx.strokeStyle = "#444";
+          ctx.lineWidth = Math.max(1, grid.tileSize * 0.08);
+          const stripes = 4;
+          for (let i = 0; i < stripes; i++) {
+            const lx = x + ((i + 0.5) / stripes) * grid.tileSize;
+            ctx.beginPath();
+            ctx.moveTo(lx, y);
+            ctx.lineTo(lx, y + grid.tileSize);
+            ctx.stroke();
+          }
+        }
+        continue;
+      }
+
       const idx = bgMap[r] ? bgMap[r][c] : 0;
       const img = images.background[idx];
-      const x = c * grid.tileSize, y = r * grid.tileSize + grid.yOffset;
       if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
       else { ctx.fillStyle = idx % 2 === 0 ? "#f4f4f4" : "#eaeaea"; ctx.fillRect(x, y, grid.tileSize, grid.tileSize); }
     }
