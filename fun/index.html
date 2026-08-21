@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>fun</title>
+<style>
+  *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body{
+    margin:0; padding:0;
+    width:100%; height:100%;
+    background:#000;
+    overflow:hidden;
+    touch-action: none;
+  }
+
+  /* Bild wird über object-fit:fill exakt auf Bildschirmbreite/-höhe
+     gestreckt — das Seitenverhältnis des Originalbilds wird dabei
+     bewusst ignoriert (so wie gewünscht: volle Fläche, keine Rücksicht
+     auf Verzerrung, kein Letterboxing/Cropping). */
+  #fullscreen-img{
+    position:fixed; inset:0;
+    width:100%; height:100%;
+    object-fit:fill;
+    display:block;
+    -webkit-user-drag:none;
+    user-select:none;
+    image-rendering: auto;
+  }
+
+  /* Kleiner Hinweis, weil Browser Ton ohne vorherige Nutzerinteraktion
+     nicht automatisch abspielen lassen — verschwindet nach dem ersten Tap. */
+  #tap-hint{
+    position:fixed; left:0; right:0; bottom:24px;
+    text-align:center;
+    color:#fff;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size:0.85rem;
+    letter-spacing:0.02em;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+    pointer-events:none;
+    transition: opacity 0.4s ease;
+    z-index:5;
+  }
+  #tap-hint.hidden{ opacity:0; }
+
+  /* Ganzflächiger, unsichtbarer Layer, der nur dazu da ist, den ersten
+     Tap/Klick/Tastendruck zuverlässig überall auf der Seite abzufangen. */
+  #tap-catcher{
+    position:fixed; inset:0; z-index:4; background:transparent;
+  }
+</style>
+</head>
+<body>
+
+<img id="fullscreen-img" src="assets/fun_image.jpg" alt="">
+<div id="tap-catcher"></div>
+<div id="tap-hint">antippen für Ton</div>
+
+<script>
+  /* ==========================================================
+     AUDIO — spielt eine einzelne mp3 in Dauerschleife ab, startet
+     aber wegen der Browser-Autoplay-Regeln erst beim ersten Tap/Klick
+     oder Tastendruck irgendwo auf der Seite.
+     ========================================================== */
+  const AUDIO_PATH = "assets/fun_music.mp3";
+
+  let audioEl = null;
+  let started = false;
+
+  function startAudio() {
+    if (started) return;
+    started = true;
+    try {
+      audioEl = new Audio(AUDIO_PATH);
+      audioEl.loop = true;
+      audioEl.play().catch(() => {});
+    } catch (e) {}
+    const hint = document.getElementById('tap-hint');
+    if (hint) hint.classList.add('hidden');
+  }
+
+  window.addEventListener('pointerdown', startAudio, { once: true });
+  window.addEventListener('keydown', startAudio, { once: true });
+</script>
+</body>
+</html>
