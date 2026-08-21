@@ -138,6 +138,83 @@ const RIGHT_WALL_COLS = 1;
 
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
+/* ==========================================================
+   AUDIO ENGINE
+   - Hintergrundmusik (music_bg.mp3) läuft in Dauerschleife über die
+     ganze Zeit auf der Hauptseite.
+   - Sobald ein Dialogfenster offen ist, wird ein Tiefpassfilter
+     (="Highcut") auf die Musik gelegt, damit sie gedämpft im
+     Hintergrund weiterläuft; beim Schließen geht sie wieder normal.
+   - A/B geben bei jedem Tastendruck (Taste oder Touch-Button, auch
+     wenn gerade kein Dialog offen ist) jeweils einen kurzen Oneshot-
+     Sound aus (sfx_a.mp3 / sfx_b.mp3).
+   - Browser verbieten Autoplay mit Ton ohne Nutzerinteraktion, daher
+     wird der AudioContext erst beim allerersten Tastendruck/Tap
+     erzeugt (siehe initAudio() weiter unten, aufgerufen von einem
+     "once"-Listener ganz am Ende der Datei).
+   ========================================================== */
+const AUDIO_PATHS = {
+  bgMusic: "assets/music_bg.mp3",
+  sfxA: "assets/sfx_a.mp3",
+  sfxB: "assets/sfx_b.mp3",
+};
+const FILTER_FREQ_OPEN = 18000;   // praktisch kein Cut (Dialog geschlossen)
+const FILTER_FREQ_CLOSED = 700;   // deutlicher Highcut (Dialog offen)
+const FILTER_RAMP_SECONDS = 0.25; // sanfter Übergang statt hartem Schnitt
+
+let audioCtx = null;
+let bgMusicEl = null;
+let bgFilterNode = null;
+let audioInitialized = false;
+
+function initAudio() {
+  if (audioInitialized) return;
+  audioInitialized = true;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new AC();
+
+    bgMusicEl = new Audio(AUDIO_PATHS.bgMusic);
+    bgMusicEl.loop = true;
+    bgMusicEl.preload = "auto";
+
+    const source = audioCtx.createMediaElementSource(bgMusicEl);
+    bgFilterNode = audioCtx.createBiquadFilter();
+    bgFilterNode.type = "lowpass";
+    bgFilterNode.frequency.value = FILTER_FREQ_OPEN;
+
+    source.connect(bgFilterNode).connect(audioCtx.destination);
+
+    // Falls die Datei fehlt, bricht play() einfach lautlos ab (kein Fehler-Popup).
+    bgMusicEl.play().catch(() => {});
+  } catch (e) {
+    // Web Audio API nicht verfügbar o.ä. — Seite bleibt einfach stumm.
+    audioCtx = null;
+  }
+}
+
+// Steuert den Highcut-Filter der Hintergrundmusik.
+function setMusicFiltered(isFiltered) {
+  if (!audioCtx || !bgFilterNode) return;
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  const target = isFiltered ? FILTER_FREQ_CLOSED : FILTER_FREQ_OPEN;
+  const now = audioCtx.currentTime;
+  bgFilterNode.frequency.cancelScheduledValues(now);
+  bgFilterNode.frequency.setValueAtTime(bgFilterNode.frequency.value, now);
+  bgFilterNode.frequency.linearRampToValueAtTime(target, now + FILTER_RAMP_SECONDS);
+}
+
+// Spielt einen kurzen Sound als Oneshot ab (eigenes Audio-Element pro Aufruf,
+// damit schnell aufeinanderfolgende Drücke sich nicht gegenseitig abschneiden).
+function playSfx(path) {
+  try {
+    const el = new Audio(path);
+    el.play().catch(() => {});
+  } catch (e) {}
+}
+function playSfxA() { if (audioInitialized) playSfx(AUDIO_PATHS.sfxA); }
+function playSfxB() { if (audioInitialized) playSfx(AUDIO_PATHS.sfxB); }
+
 // Dauer eines einzelnen Kachel-Schritts in Millisekunden (klassische
 // Tile-Bewegung à la Pokémon/Zelda — konstant, unabhängig von der
 // tatsächlichen Pixelgröße der Kacheln).
@@ -206,6 +283,17 @@ const BAR_TEXT_COLOR = "#ffffff";
    CSS-Buttons mit Pfeil-Dreiecken/Buchstaben einfach bestehen):
      btn_up.png    btn_down.png    btn_left.png    btn_right.png
      btn_a.png     btn_b.png
+
+   "NEU"-BADGE (optional — fehlt die Datei, wird ersatzweise ein
+   kleiner schwarzer Punkt oben rechts am Icon gezeichnet):
+     new.png — wird oben rechts über jedes Icon gelegt, bei dem
+     in der stations-Liste weiter unten isNew: true gesetzt ist.
+
+   AUDIO (optional — fehlen die Dateien, bleibt die Seite einfach
+   stumm, es gibt keine Fehler):
+     music_bg.mp3 — Hintergrundmusik der Hauptseite, läuft in Dauerschleife
+     sfx_a.mp3    — kurzer Sound, der bei jedem Druck auf A abgespielt wird
+     sfx_b.mp3    — kurzer Sound, der bei jedem Druck auf B abgespielt wird
    ========================================================== */
 const ASSET_PATHS = {
   player: {
@@ -222,6 +310,7 @@ const ASSET_PATHS = {
     "assets/background_5.png",
   ],
   backgroundRight: "assets/background_right.png",
+  newBadge: "assets/new.png",
   controls: {
     up:    "assets/btn_up.png",
     down:  "assets/btn_down.png",
@@ -244,14 +333,22 @@ const BG_WEIGHTS = [50, 20, 30, 0, 0];
      text  - eigener Text fürs Dialogfeld, z.B. "Hör mal in meinen
              neuen Track rein!". Leer lassen (""), um stattdessen
              einfach "label" als Standardtext zu zeigen.
+     isNew - true/false (bzw. 1/0 funktioniert genauso, da JS beides
+             als "wahr"/"falsch" behandelt). Bei true wird oben rechts
+             über dem Icon die Grafik new.png eingeblendet, bei false
+             ist dort einfach nichts.
    ========================================================== */
 const stations = [
-  { label: "instagram",  icon: "instagram",  url: "https://www.instagram.com/affeimgruenenauto/", text: "" },
-  { label: "beatstars",  icon: "beatstars",  url: "https://www.beatstars.com/icedoutfinn", text: "" },
-  { label: "moxfield",   icon: "moxfield",   url: "https://moxfield.com/users/ohrenzwickerlein44", text: "" },
-  { label: "soundcloud", icon: "soundcloud", url: "https://soundcloud.com/finn-schindele", text: "" },
-  { label: "spotify",    icon: "spotify",    url: "https://open.spotify.com/intl-de/artist/1olhqVu0Dx8g0ome7BIq7D?si=5OpyHOi0RH-7D64V_i4OCg", text: "" },
-  { label: "youtube",    icon: "youtube",    url: "https://youtube.com/@deinhandle", text: "" },
+  { label: "instagram",  icon: "instagram",  url: "https://www.instagram.com/affeimgruenenauto/", text: "", isNew: false },
+  { label: "beatstars",  icon: "beatstars",  url: "https://www.beatstars.com/icedoutfinn", text: "", isNew: false },
+  { label: "moxfield",   icon: "moxfield",   url: "https://moxfield.com/users/ohrenzwickerlein44", text: "", isNew: false },
+  { label: "soundcloud", icon: "soundcloud", url: "https://soundcloud.com/finn-schindele", text: "", isNew: false },
+  { label: "spotify",    icon: "spotify",    url: "https://open.spotify.com/intl-de/artist/1olhqVu0Dx8g0ome7BIq7D?si=5OpyHOi0RH-7D64V_i4OCg", text: "", isNew: false },
+  { label: "youtube",    icon: "youtube",    url: "https://youtube.com/@deinhandle", text: "", isNew: false },
+  // "fun" verweist auf die separate Subseite fun.html (siehe eigene Datei) —
+  // funktioniert technisch genau wie jede andere Station, url zeigt einfach
+  // auf eine eigene HTML-Datei statt auf eine externe Plattform.
+  { label: "fun",        icon: "fun",        url: "fun.html", text: "", isNew: true },
 ];
 
 /* ==========================================================
@@ -299,7 +396,7 @@ function applyButtonImage(id, img) {
   el.appendChild(im);
 }
 
-const images = { player: {}, icons: {}, background: [], backgroundRight: null };
+const images = { player: {}, icons: {}, background: [], backgroundRight: null, newBadge: null };
 
 async function loadAssets() {
   for (const dir of ["down", "up", "left", "right"]) {
@@ -317,6 +414,7 @@ async function loadAssets() {
     images.background.push(await loadImage(path));
   }
   images.backgroundRight = await loadImage(ASSET_PATHS.backgroundRight);
+  images.newBadge = await loadImage(ASSET_PATHS.newBadge);
   const c = ASSET_PATHS.controls;
   applyButtonImage('dpad-up', await loadImage(c.up));
   applyButtonImage('dpad-down', await loadImage(c.down));
@@ -452,9 +550,9 @@ const KEY_TO_DIR = {
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (KEY_TO_DIR[k]) setDirState(KEY_TO_DIR[k], true);
-  if (dialogOpen && (k === "enter" || k === " ")) confirmAction();
-  else if (dialogOpen && k === "escape") closeDialog();
-  else if (!dialogOpen && k === "enter") pressA();
+  if (dialogOpen && (k === "enter" || k === " ")) { playSfxA(); confirmAction(); }
+  else if (dialogOpen && k === "escape") { playSfxB(); closeDialog(); }
+  else if (!dialogOpen && k === "enter") { playSfxA(); pressA(); }
 });
 window.addEventListener('keyup', (e) => {
   const k = e.key.toLowerCase();
@@ -470,9 +568,9 @@ function tryInteract() {
   const v = DIR_VECTORS[player.dir];
   const fx = player.tileX + v.dx, fy = player.tileY + v.dy;
   const s = stations.find(st => st.tileX === fx && st.tileY === fy);
-  if (s) { dialogOpen = true; activeStation = s; }
+  if (s) { dialogOpen = true; activeStation = s; setMusicFiltered(true); }
 }
-function closeDialog() { dialogOpen = false; activeStation = null; }
+function closeDialog() { dialogOpen = false; activeStation = null; setMusicFiltered(false); }
 
 /* ==========================================================
    BEDIENOBERFLÄCHE — Pointer Events statt reiner Touch-Events,
@@ -492,8 +590,14 @@ bindButton('dpad-up',    () => setDirState('up', true),    () => setDirState('up
 bindButton('dpad-down',  () => setDirState('down', true),  () => setDirState('down', false));
 bindButton('dpad-left',  () => setDirState('left', true),  () => setDirState('left', false));
 bindButton('dpad-right', () => setDirState('right', true), () => setDirState('right', false));
-bindButton('btn-a', () => { if (dialogOpen) confirmAction(); else pressA(); });
-bindButton('btn-b', () => { pressB(); });
+bindButton('btn-a', () => { playSfxA(); if (dialogOpen) confirmAction(); else pressA(); });
+bindButton('btn-b', () => { playSfxB(); pressB(); });
+
+// AudioContext darf laut Browser-Regeln erst nach einer echten
+// Nutzerinteraktion erzeugt werden — daher hier ganz allgemein auf den
+// allerersten Tastendruck/Tap irgendwo auf der Seite warten.
+window.addEventListener('keydown', initAudio, { once: true });
+window.addEventListener('pointerdown', initAudio, { once: true });
 
 /* ==========================================================
    UPDATE — ein Kachel-Schritt nach dem anderen
@@ -583,12 +687,42 @@ function drawBackground() {
   }
 }
 
+// Größe des "neu"-Badges relativ zur Kachelgröße, und wie weit es über den
+// oberen/rechten Rand des Icons hinausragt (0 = bündig, >0 = ragt raus).
+const NEW_BADGE_SCALE = 0.42;
+const NEW_BADGE_OVERHANG = 0.28;
+
+function drawNewBadge(x, y) {
+  const size = grid.tileSize * NEW_BADGE_SCALE;
+  const overhang = grid.tileSize * NEW_BADGE_OVERHANG;
+  // Ankerpunkt: oben rechts an der Icon-Kachel, leicht nach außen versetzt.
+  const bx = x + grid.tileSize - size + overhang;
+  const by = y - overhang;
+  if (images.newBadge) {
+    ctx.drawImage(images.newBadge, bx, by, size, size);
+  } else {
+    // Fallback ohne eigene Grafik: schwarzer Kreis mit weißem "!"
+    ctx.beginPath();
+    ctx.arc(bx + size / 2, by + size / 2, size / 2, 0, Math.PI * 2);
+    ctx.fillStyle = "#000";
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.font = `${Math.round(size * 0.6)}px 'Press Start 2P', monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("!", bx + size / 2, by + size / 2 + 1);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  }
+}
+
 function drawIcons() {
   stations.forEach(s => {
     const x = s.tileX * grid.tileSize, y = s.tileY * grid.tileSize + grid.yOffset;
     const img = images.icons[s.icon];
     if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
     else drawFallback(FALLBACK_ICON, x + grid.tileSize / 2, y + grid.tileSize / 2, grid.tileSize);
+    if (s.isNew) drawNewBadge(x, y);
   });
 }
 
