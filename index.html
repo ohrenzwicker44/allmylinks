@@ -237,7 +237,7 @@ const UI_TEXT = {
   // Text, der zentriert im oberen Rand steht
   title: "ludo_links",
   // Hinweistext im Dialogfenster, erscheint bei jedem Icon gleich
-  interactHint: "A: öffnen   B: schließen",
+  interactHint: "A: open   B: close",
 };
 
 // Farbe des oberen/unteren Rands und der Schrift darin (auch der Titel
@@ -266,6 +266,7 @@ const BAR_TEXT_COLOR = "#ffffff";
      icon_soundcloud.png
      icon_spotify.png
      icon_youtube.png
+     icon_fun.png
 
    HINTERGRUND — 5 Kachel-Varianten, werden zufällig gemischt
    (Gewichtung siehe BG_WEIGHTS weiter unten):
@@ -340,19 +341,19 @@ const BG_WEIGHTS = [50, 20, 30, 0, 0];
    ========================================================== */
 const stations = [
   { label: "instagram",  icon: "instagram",  url: "https://www.instagram.com/affeimgruenenauto/", text: "", isNew: false },
-  { label: "beatstars",  icon: "beatstars",  url: "https://www.beatstars.com/icedoutfinn", text: "", isNew: false },
+  { label: "beatstars",  icon: "beatstars",  url: "https://www.beatstars.com/icedoutfinn", text: "", isNew: true },
   { label: "moxfield",   icon: "moxfield",   url: "https://moxfield.com/users/ohrenzwickerlein44", text: "", isNew: false },
-  { label: "soundcloud", icon: "soundcloud", url: "https://soundcloud.com/finn-schindele", text: "", isNew: false },
+  { label: "soundcloud", icon: "soundcloud", url: "https://soundcloud.com/finn-schindele", text: "", isNew: true },
   { label: "spotify",    icon: "spotify",    url: "https://open.spotify.com/intl-de/artist/1olhqVu0Dx8g0ome7BIq7D?si=5OpyHOi0RH-7D64V_i4OCg", text: "", isNew: false },
   { label: "youtube",    icon: "youtube",    url: "https://youtube.com/@deinhandle", text: "", isNew: false },
   // "fun" verweist auf die separate Subseite fun.html (siehe eigene Datei) —
   // funktioniert technisch genau wie jede andere Station, url zeigt einfach
   // auf eine eigene HTML-Datei statt auf eine externe Plattform.
-  { label: "fun",        icon: "fun",        url: "fun.html", text: "", isNew: true },
+  { label: "fun",        icon: "fun",        url: "https://ohrenzwicker44.github.io/allmylinks/fun", text: "", isNew: false },
 ];
 
 /* ==========================================================
-   FALLBACK-BITMAPS (greifen automatisch, solange eigene
+   FALLBACK-BITMAPS (greifen automatisch, solange eigen
    Dateien fehlen — Spiel läuft sofort, auch ohne Assets)
    ========================================================== */
 const FALLBACK_PLAYER = [
