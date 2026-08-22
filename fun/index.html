@@ -3,851 +3,112 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>ludo_links</title>
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<title>fun</title>
 <style>
   *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body{
     margin:0; padding:0;
     width:100%; height:100%;
-    background:#fff;
+    background:#000;
     overflow:hidden;
-    font-family:'Press Start 2P', monospace;
     touch-action: none;
   }
-  #game{
+
+  /* ===== "Reveal"-Screen — das hier sieht man zuerst. Klick/Tap
+     blendet ihn aus und startet Bild + Ton im selben Moment. ===== */
+  #reveal-screen{
     position:fixed; inset:0;
-    display:block;
-    image-rendering: pixelated;
-    image-rendering: crisp-edges;
-  }
-  #loading{
-    position:fixed; inset:0; z-index:20;
+    background: var(--reveal-bg, #00b140);   /* Grün, siehe REVEAL_CONFIG unten */
     display:flex; align-items:center; justify-content:center;
-    background:#fff; color:#000; font-size:0.7rem;
-  }
-
-  /* ===== Bedienoberfläche — immer sichtbar, feste Höhe (siehe
-     CONTROL_AREA_HEIGHT im Script, beide Werte im Sync halten) ===== */
-  #controls{
-    position:fixed; left:0; right:0; bottom:0;
-    height:150px;
-    display:flex; justify-content:space-between; align-items:center;
-    padding: 0 20px;
-    pointer-events:none;
+    cursor:pointer;
     z-index:10;
+    padding: 32px;
+    text-align:center;
+    transition: opacity 0.25s ease;
   }
-  .pixel-btn{
-    background:#fff; color:#000;
-    border:2px solid #000;
-    font-family:'Press Start 2P', monospace;
-    font-size:0.85rem;
-    display:flex; align-items:center; justify-content:center;
-    user-select:none; pointer-events:auto;
-    overflow:hidden;
-  }
-  .pixel-btn.pressed{ background:#000; color:#fff; }
-  /* Wird automatisch gesetzt, sobald ein eigenes Button-Bild erfolgreich lädt */
-  .pixel-btn img{
-    width:100%; height:100%;
-    object-fit:cover;
-    image-rendering:pixelated;
+  #reveal-screen.hidden{
+    opacity:0;
     pointer-events:none;
   }
-
-  /* Steuerkreuz: quadratische, leicht abgerundete Tasten. Die Pfeile
-     bestehen aus reinem CSS (border-Trick), nicht aus Unicode-Zeichen —
-     dadurch sehen sie auf jedem Gerät/Betriebssystem identisch aus.
-     (Unicode-Pfeile wie ▲◀▶▼ werden z.B. auf iOS teils als bunte Emojis
-     gerendert und ignorieren dann die CSS-Farbe — daher der Wechsel.) */
-  .dpad-btn{ border-radius:6px; }
-  .arrow{ width:0; height:0; pointer-events:none; }
-  .arrow-up{    border-left:7px solid transparent; border-right:7px solid transparent; border-bottom:12px solid currentColor; }
-  .arrow-down{  border-left:7px solid transparent; border-right:7px solid transparent; border-top:12px solid currentColor; }
-  .arrow-left{  border-top:7px solid transparent;  border-bottom:7px solid transparent; border-right:12px solid currentColor; }
-  .arrow-right{ border-top:7px solid transparent;  border-bottom:7px solid transparent; border-left:12px solid currentColor; }
-
-  /* A/B: runde, Gameboy-typische Aktionstasten */
-  .ab-btn{ border-radius:50%; }
-
-  .pad{
-    display:grid;
-    grid-template-columns: 44px 44px 44px;
-    grid-template-rows: 44px 44px 44px;
-    gap:2px;
+  #reveal-text{
+    font-family: 'Comic Sans MS', 'Comic Sans', cursive, sans-serif;
+    color: var(--reveal-color, #ff0000);     /* Rot, siehe REVEAL_CONFIG unten */
+    font-size: clamp(1.6rem, 7vw, 3.2rem);
+    font-weight: bold;
+    line-height: 1.3;
+    text-shadow: 2px 2px 0 rgba(0,0,0,0.15);
+    /* Leichtes Pulsieren, damit klar ist, dass man klicken/tippen soll */
+    animation: pulse 1.4s ease-in-out infinite;
   }
-  #dpad-up{grid-column:2; grid-row:1;}
-  #dpad-left{grid-column:1; grid-row:2;}
-  #dpad-right{grid-column:3; grid-row:2;}
-  #dpad-down{grid-column:2; grid-row:3;}
-
-  .abpad{
-    display:grid;
-    grid-template-columns: 52px 52px;
-    grid-template-rows: 52px 52px;
-    gap:8px;
+  @keyframes pulse{
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.06); }
   }
-  #btn-b{ grid-column:1; grid-row:2; }
-  #btn-a{ grid-column:2; grid-row:1; }
+
+  /* Bild wird über object-fit:fill exakt auf Bildschirmbreite/-höhe
+     gestreckt — das Seitenverhältnis des Originalbilds wird dabei
+     bewusst ignoriert (volle Fläche, keine Rücksicht auf Verzerrung,
+     kein Letterboxing/Cropping). */
+  #fullscreen-img{
+    position:fixed; inset:0;
+    width:100%; height:100%;
+    object-fit:fill;
+    display:block;
+    -webkit-user-drag:none;
+    user-select:none;
+  }
 </style>
 </head>
 <body>
 
-<canvas id="game"></canvas>
-<div id="loading">lädt…</div>
-
-<div id="controls">
-  <div class="pad">
-    <button class="pixel-btn dpad-btn" id="dpad-up"><span class="arrow arrow-up"></span></button>
-    <button class="pixel-btn dpad-btn" id="dpad-left"><span class="arrow arrow-left"></span></button>
-    <button class="pixel-btn dpad-btn" id="dpad-right"><span class="arrow arrow-right"></span></button>
-    <button class="pixel-btn dpad-btn" id="dpad-down"><span class="arrow arrow-down"></span></button>
-  </div>
-  <div class="abpad">
-    <button class="pixel-btn ab-btn" id="btn-b">B</button>
-    <button class="pixel-btn ab-btn" id="btn-a">A</button>
-  </div>
+<!-- ==========================================================
+     REVEAL-TEXT — hier änderbar. HTML-Zeilenumbruch mit <br> möglich.
+     Farben/Hintergrund werden über REVEAL_CONFIG weiter unten im
+     Script gesteuert (Standard: rote Schrift auf grünem Grund).
+     ========================================================== -->
+<div id="reveal-screen">
+  <div id="reveal-text">Klick mich,<br>wenn du bereit bist… 👀</div>
 </div>
 
+<img id="fullscreen-img" src="assets/fun_image.jpg" alt="" style="display:none;">
+
 <script>
-/* ==========================================================
-   GRUNDKONFIGURATION
-   ========================================================== */
+  /* ==========================================================
+     KONFIGURATION — hier lässt sich der Reveal-Screen anpassen,
+     ohne den Rest des Scripts anfassen zu müssen.
+     ========================================================== */
+  const REVEAL_CONFIG = {
+    backgroundColor: "#00b140", // Grün
+    textColor: "#ff0000",       // Rot
+  };
+  const AUDIO_PATH = "assets/fun_music.mp3";
 
-// Zielgröße des Rasters: insgesamt ungefähr TARGET_TILE_COUNT Kacheln,
-// aufgeteilt nach Seitenverhältnis des verfügbaren Spielbereichs (siehe
-// unten), aber jede Seite (Spalten/Reihen) auf 6–12 Kacheln begrenzt.
-const TARGET_TILE_COUNT = 70;
-const MIN_TILES_PER_SIDE = 6;
-const MAX_TILES_PER_SIDE = 12;
+  document.documentElement.style.setProperty('--reveal-bg', REVEAL_CONFIG.backgroundColor);
+  document.documentElement.style.setProperty('--reveal-color', REVEAL_CONFIG.textColor);
 
-// Ungefähre Höhe der Bedienelemente in px — bestimmt, wie groß der freie
-// Rand oben/unten ungefähr sein soll. Muss zur #controls-Höhe im CSS passen.
-const CONTROL_AREA_HEIGHT = 150;
+  let started = false;
 
-// Mindestabstand zwischen zwei Icons, gemessen in Kacheln (Chebyshev-Distanz).
-// 2 bedeutet: zwischen zwei Icons liegt immer mindestens ein freies Feld.
-const MIN_ICON_TILE_GAP = 2;
+  function reveal() {
+    if (started) return;
+    started = true;
 
-// Die rechte(n) Spalte(n) sind eine unsichtbare Wand: dort kann der
-// Charakter nicht hinlaufen und es spawnen keine Icons. Das behebt einen
-// Rundungseffekt, durch den das Raster rechts leicht über den sichtbaren
-// Bildschirm hinausragen kann (Math.ceil beim Spalten-Runden weiter unten) —
-// ohne diese Wand könnte man in diese (teils unsichtbare) Spalte hineinlaufen.
-const RIGHT_WALL_COLS = 1;
+    // Bild und Ton erscheinen/starten im selben Moment für den
+    // Überraschungseffekt.
+    document.getElementById('fullscreen-img').style.display = 'block';
+    try {
+      const audioEl = new Audio(AUDIO_PATH);
+      audioEl.loop = true;
+      audioEl.play().catch(() => {});
+    } catch (e) {}
 
-function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-
-/* ==========================================================
-   AUDIO ENGINE
-   - Hintergrundmusik (music_bg.mp3) läuft in Dauerschleife über die
-     ganze Zeit auf der Hauptseite.
-   - Sobald ein Dialogfenster offen ist, wird ein Tiefpassfilter
-     (="Highcut") auf die Musik gelegt, damit sie gedämpft im
-     Hintergrund weiterläuft; beim Schließen geht sie wieder normal.
-   - A/B geben bei jedem Tastendruck (Taste oder Touch-Button, auch
-     wenn gerade kein Dialog offen ist) jeweils einen kurzen Oneshot-
-     Sound aus (sfx_a.mp3 / sfx_b.mp3).
-   - Browser verbieten Autoplay mit Ton ohne Nutzerinteraktion, daher
-     wird der AudioContext erst beim allerersten Tastendruck/Tap
-     erzeugt (siehe initAudio() weiter unten, aufgerufen von einem
-     "once"-Listener ganz am Ende der Datei).
-   ========================================================== */
-const AUDIO_PATHS = {
-  bgMusic: "assets/music_bg.mp3",
-  sfxA: "assets/sfx_a.mp3",
-  sfxB: "assets/sfx_b.mp3",
-};
-const FILTER_FREQ_OPEN = 18000;   // praktisch kein Cut (Dialog geschlossen)
-const FILTER_FREQ_CLOSED = 700;   // deutlicher Highcut (Dialog offen)
-const FILTER_RAMP_SECONDS = 0.25; // sanfter Übergang statt hartem Schnitt
-
-let audioCtx = null;
-let bgMusicEl = null;
-let bgFilterNode = null;
-let audioInitialized = false;
-
-function initAudio() {
-  if (audioInitialized) return;
-  audioInitialized = true;
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    audioCtx = new AC();
-
-    bgMusicEl = new Audio(AUDIO_PATHS.bgMusic);
-    bgMusicEl.loop = true;
-    bgMusicEl.preload = "auto";
-
-    const source = audioCtx.createMediaElementSource(bgMusicEl);
-    bgFilterNode = audioCtx.createBiquadFilter();
-    bgFilterNode.type = "lowpass";
-    bgFilterNode.frequency.value = FILTER_FREQ_OPEN;
-
-    source.connect(bgFilterNode).connect(audioCtx.destination);
-
-    // Falls die Datei fehlt, bricht play() einfach lautlos ab (kein Fehler-Popup).
-    bgMusicEl.play().catch(() => {});
-  } catch (e) {
-    // Web Audio API nicht verfügbar o.ä. — Seite bleibt einfach stumm.
-    audioCtx = null;
-  }
-}
-
-// Steuert den Highcut-Filter der Hintergrundmusik.
-function setMusicFiltered(isFiltered) {
-  if (!audioCtx || !bgFilterNode) return;
-  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
-  const target = isFiltered ? FILTER_FREQ_CLOSED : FILTER_FREQ_OPEN;
-  const now = audioCtx.currentTime;
-  bgFilterNode.frequency.cancelScheduledValues(now);
-  bgFilterNode.frequency.setValueAtTime(bgFilterNode.frequency.value, now);
-  bgFilterNode.frequency.linearRampToValueAtTime(target, now + FILTER_RAMP_SECONDS);
-}
-
-// Spielt einen kurzen Sound als Oneshot ab (eigenes Audio-Element pro Aufruf,
-// damit schnell aufeinanderfolgende Drücke sich nicht gegenseitig abschneiden).
-function playSfx(path) {
-  try {
-    const el = new Audio(path);
-    el.play().catch(() => {});
-  } catch (e) {}
-}
-function playSfxA() { if (audioInitialized) playSfx(AUDIO_PATHS.sfxA); }
-function playSfxB() { if (audioInitialized) playSfx(AUDIO_PATHS.sfxB); }
-
-// Dauer eines einzelnen Kachel-Schritts in Millisekunden (klassische
-// Tile-Bewegung à la Pokémon/Zelda — konstant, unabhängig von der
-// tatsächlichen Pixelgröße der Kacheln).
-const MOVE_TIME = 320;
-// Dauer, nach der beim Laufen zwischen "_l" und "_r" gewechselt wird.
-const WALK_FRAME_TIME = MOVE_TIME / 2;
-
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
-
-// Aktueller Grid-Zustand, wird bei jedem Resize neu berechnet.
-// yOffset/barHeight = Höhe des freien Rands oben (= unten, exakt gleich groß).
-let grid = { cols: 0, rows: 0, tileSize: 0, width: 0, height: 0, yOffset: 0, barHeight: 0 };
-
-/* ==========================================================
-   TEXTE — hier zentral änderbar (z.B. für eine andere Sprache
-   oder einen anderen Titel).
-   ========================================================== */
-const UI_TEXT = {
-  // Text, der zentriert im oberen Rand steht
-  title: "ludo_links",
-  // Hinweistext im Dialogfenster, erscheint bei jedem Icon gleich
-  interactHint: "A: open   B: close",
-};
-
-// Farbe des oberen/unteren Rands und der Schrift darin (auch der Titel
-// oben verwendet BAR_TEXT_COLOR). Jeder gültige CSS-Farbwert geht,
-// z.B. auch "#f5c400" oder "rgb(20,20,20)".
-const BAR_COLOR = "#000000";
-const BAR_TEXT_COLOR = "#ffffff";
-
-/* ==========================================================
-   ASSETS
-
-   Alle Bilder sind 32x32 px PNG mit Transparenz (außer die
-   Hintergrund-Kacheln, die dürfen auch JPG sein, aber PNG ist
-   konsistenter). Sie liegen alle im Ordner "assets/".
-
-   CHARAKTER — pro Richtung 3 Bilder:
-     front_stand.png    front_walk_l.png    front_walk_r.png   (Blick zur Kamera / nach unten)
-     back_stand.png     back_walk_l.png     back_walk_r.png    (Rücken zur Kamera / nach oben)
-     left_stand.png     left_walk_l.png     left_walk_r.png
-     right_stand.png    right_walk_l.png    right_walk_r.png
-
-   ICONS — feste Dateinamen:
-     icon_instagram.png
-     icon_beatstars.png
-     icon_moxfield.png
-     icon_soundcloud.png
-     icon_spotify.png
-     icon_youtube.png
-     icon_fun.png
-
-   HINTERGRUND — 5 Kachel-Varianten, werden zufällig gemischt
-   (Gewichtung siehe BG_WEIGHTS weiter unten):
-     background_1.png / background_2.png / background_3.png /
-     background_4.png / background_5.png
-
-   WAND — die rechte(n) Spalte(n) (siehe RIGHT_WALL_COLS) sind für den
-   Charakter gesperrt und bekommen statt eines normalen Hintergrunds
-   immer dieses eine Bild, z.B. ein Vorhang-Motiv:
-     background_right.png (optional — fehlt sie, wird stattdessen ein
-     einfaches gestreiftes Muster gezeichnet, die Wand bleibt trotzdem
-     immer gesperrt, unabhängig davon ob die Grafik vorhanden ist)
-
-   STEUERELEMENTE (optional — fehlen sie, bleiben die aktuellen
-   CSS-Buttons mit Pfeil-Dreiecken/Buchstaben einfach bestehen):
-     btn_up.png    btn_down.png    btn_left.png    btn_right.png
-     btn_a.png     btn_b.png
-
-   "NEU"-BADGE (optional — fehlt die Datei, wird ersatzweise ein
-   kleiner schwarzer Punkt oben rechts am Icon gezeichnet):
-     new.png — wird oben rechts über jedes Icon gelegt, bei dem
-     in der stations-Liste weiter unten isNew: true gesetzt ist.
-
-   AUDIO (optional — fehlen die Dateien, bleibt die Seite einfach
-   stumm, es gibt keine Fehler):
-     music_bg.mp3 — Hintergrundmusik der Hauptseite, läuft in Dauerschleife
-     sfx_a.mp3    — kurzer Sound, der bei jedem Druck auf A abgespielt wird
-     sfx_b.mp3    — kurzer Sound, der bei jedem Druck auf B abgespielt wird
-   ========================================================== */
-const ASSET_PATHS = {
-  player: {
-    down:  { stand: "assets/front_stand.png", l: "assets/front_walk_l.png", r: "assets/front_walk_r.png" },
-    up:    { stand: "assets/back_stand.png",  l: "assets/back_walk_l.png",  r: "assets/back_walk_r.png" },
-    left:  { stand: "assets/left_stand.png",  l: "assets/left_walk_l.png",  r: "assets/left_walk_r.png" },
-    right: { stand: "assets/right_stand.png", l: "assets/right_walk_l.png", r: "assets/right_walk_r.png" },
-  },
-  background: [
-    "assets/background_1.png",
-    "assets/background_2.png",
-    "assets/background_3.png",
-    "assets/background_4.png",
-    "assets/background_5.png",
-  ],
-  backgroundRight: "assets/background_right.png",
-  newBadge: "assets/new.png",
-  controls: {
-    up:    "assets/btn_up.png",
-    down:  "assets/btn_down.png",
-    left:  "assets/btn_left.png",
-    right: "assets/btn_right.png",
-    a:     "assets/btn_a.png",
-    b:     "assets/btn_b.png",
-  },
-};
-
-// Gewichtung der Hintergrund-Kacheln in %, muss zu ASSET_PATHS.background passen
-const BG_WEIGHTS = [50, 20, 30, 0, 0];
-
-/* ==========================================================
-   HIER DEINE LINKS (UND TEXTE) EINTRAGEN
-   Jede Station braucht:
-     label - Anzeigename, wird als Standardtext im Dialog verwendet
-     icon  - muss zu "icon_<icon>.png" passen
-     url   - Ziel-Link, öffnet sich bei Bestätigung mit A
-     text  - eigener Text fürs Dialogfeld, z.B. "Hör mal in meinen
-             neuen Track rein!". Leer lassen (""), um stattdessen
-             einfach "label" als Standardtext zu zeigen.
-     isNew - true/false (bzw. 1/0 funktioniert genauso, da JS beides
-             als "wahr"/"falsch" behandelt). Bei true wird oben rechts
-             über dem Icon die Grafik new.png eingeblendet, bei false
-             ist dort einfach nichts.
-   ========================================================== */
-const stations = [
-  { label: "instagram",  icon: "instagram",  url: "https://www.instagram.com/affeimgruenenauto/", text: "", isNew: false },
-  { label: "beatstars",  icon: "beatstars",  url: "https://www.beatstars.com/icedoutfinn", text: "", isNew: true },
-  { label: "moxfield",   icon: "moxfield",   url: "https://moxfield.com/users/ohrenzwickerlein44", text: "", isNew: false },
-  { label: "soundcloud", icon: "soundcloud", url: "https://soundcloud.com/finn-schindele", text: "", isNew: true },
-  { label: "spotify",    icon: "spotify",    url: "https://open.spotify.com/intl-de/artist/1olhqVu0Dx8g0ome7BIq7D?si=5OpyHOi0RH-7D64V_i4OCg", text: "", isNew: false },
-  { label: "youtube",    icon: "youtube",    url: "https://youtube.com/@deinhandle", text: "", isNew: false },
-  // "fun" verweist auf die separate Subseite fun.html (siehe eigene Datei) —
-  // funktioniert technisch genau wie jede andere Station, url zeigt einfach
-  // auf eine eigene HTML-Datei statt auf eine externe Plattform.
-  { label: "fun",        icon: "fun",        url: "https://ohrenzwicker44.github.io/allmylinks/fun", text: "", isNew: false },
-];
-
-/* ==========================================================
-   FALLBACK-BITMAPS (greifen automatisch, solange eigen
-   Dateien fehlen — Spiel läuft sofort, auch ohne Assets)
-   ========================================================== */
-const FALLBACK_PLAYER = [
-  "00011111100","00111111110","01111111111","01101111011","01111111111",
-  "00111111110","00011111100","00111111110","01111111111","00110000110","01111001111",
-];
-const FALLBACK_ICON = [
-  "00000000000","00111111100","01111111110","01100011110","11000000111",
-  "11000000111","01100011110","01111111110","00111111100","00000000000","00000000000",
-];
-function drawFallback(bitmap, cx, cy, size) {
-  ctx.fillStyle = "#000";
-  const cell = size / bitmap.length;
-  const px = cx - size / 2, py = cy - size / 2;
-  for (let row = 0; row < bitmap.length; row++)
-    for (let col = 0; col < bitmap[row].length; col++)
-      if (bitmap[row][col] === "1") ctx.fillRect(px + col * cell, py + row * cell, cell, cell);
-}
-
-/* ==========================================================
-   ASSET-LOADING
-   ========================================================== */
-function loadImage(path) {
-  return new Promise((resolve) => {
-    if (!path) { resolve(null); return; }
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = path;
-  });
-}
-
-// Setzt ein eigenes Bild als Button-Inhalt, falls es geladen werden konnte.
-// Fehlt die Datei, bleiben die bisherigen CSS-Pfeile/Buchstaben als Fallback.
-function applyButtonImage(id, img) {
-  if (!img) return;
-  const el = document.getElementById(id);
-  el.textContent = "";
-  const im = document.createElement('img');
-  im.src = img.src;
-  el.appendChild(im);
-}
-
-const images = { player: {}, icons: {}, background: [], backgroundRight: null, newBadge: null };
-
-async function loadAssets() {
-  for (const dir of ["down", "up", "left", "right"]) {
-    const p = ASSET_PATHS.player[dir];
-    images.player[dir] = {
-      stand: await loadImage(p.stand),
-      l: await loadImage(p.l),
-      r: await loadImage(p.r),
-    };
-  }
-  for (const s of stations) {
-    images.icons[s.icon] = await loadImage(`assets/icon_${s.icon}.png`);
-  }
-  for (const path of ASSET_PATHS.background) {
-    images.background.push(await loadImage(path));
-  }
-  images.backgroundRight = await loadImage(ASSET_PATHS.backgroundRight);
-  images.newBadge = await loadImage(ASSET_PATHS.newBadge);
-  const c = ASSET_PATHS.controls;
-  applyButtonImage('dpad-up', await loadImage(c.up));
-  applyButtonImage('dpad-down', await loadImage(c.down));
-  applyButtonImage('dpad-left', await loadImage(c.left));
-  applyButtonImage('dpad-right', await loadImage(c.right));
-  applyButtonImage('btn-a', await loadImage(c.a));
-  applyButtonImage('btn-b', await loadImage(c.b));
-
-  document.getElementById('loading').style.display = 'none';
-}
-
-/* ==========================================================
-   WELT-GENERIERUNG (Hintergrund-Kacheln + Icon-Positionen)
-   ========================================================== */
-function weightedBgIndex() {
-  const r = Math.random() * 100;
-  let acc = 0;
-  for (let i = 0; i < BG_WEIGHTS.length; i++) {
-    acc += BG_WEIGHTS[i];
-    if (r < acc) return i;
-  }
-  return BG_WEIGHTS.length - 1;
-}
-
-let bgMap = [];
-function generateBackground() {
-  const map = [];
-  for (let r = 0; r < grid.rows; r++) {
-    const row = [];
-    for (let c = 0; c < grid.cols; c++) row.push(weightedBgIndex());
-    map.push(row);
-  }
-  return map;
-}
-
-function isTileFree(tx, ty) {
-  if (tx < 0 || tx >= grid.cols || ty < 0 || ty >= grid.rows) return false;
-  if (tx >= grid.cols - RIGHT_WALL_COLS) return false; // rechte Wand-Spalte(n)
-  return !stations.some(s => s.tileX === tx && s.tileY === ty);
-}
-
-// Platziert alle Icons mit garantiertem Mindestabstand zueinander (Icons
-// dürfen jetzt im ganzen Raster liegen — die Bedienelemente sitzen im
-// eigenen Rand außerhalb des Spielfelds, es braucht also keine tabu-Reihen
-// mehr wie in der Vorversion). Statt reinem Zufalls-Sampling wird die
-// Liste aller Felder gemischt und dann deterministisch nach freien,
-// ausreichend entfernten Feldern durchsucht.
-function placeIcons() {
-  const allTiles = [];
-  for (let r = 0; r < grid.rows; r++)
-    for (let c = 0; c < grid.cols - RIGHT_WALL_COLS; c++) allTiles.push({ tx: c, ty: r });
-
-  for (let i = allTiles.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [allTiles[i], allTiles[j]] = [allTiles[j], allTiles[i]];
+    const screen = document.getElementById('reveal-screen');
+    screen.classList.add('hidden');
+    // Nach dem Fade-out komplett aus dem Layout nehmen.
+    setTimeout(() => { screen.style.display = 'none'; }, 300);
   }
 
-  let gap = MIN_ICON_TILE_GAP;
-  let placed = [];
-  while (gap >= 0) {
-    placed = [];
-    let success = true;
-    for (const s of stations) {
-      const tile = allTiles.find(t =>
-        !placed.some(p => Math.max(Math.abs(p.tx - t.tx), Math.abs(p.ty - t.ty)) < gap)
-      );
-      if (!tile) { success = false; break; }
-      placed.push({ tx: tile.tx, ty: tile.ty, station: s });
-    }
-    if (success) break;
-    gap--; // Raster zu klein für den gewünschten Abstand -> Abstand verringern statt zu überlappen
-  }
-  placed.forEach(p => { p.station.tileX = p.tx; p.station.tileY = p.ty; });
-}
-
-function placePlayer() {
-  let tx = Math.min(Math.floor(grid.cols / 2), grid.cols - RIGHT_WALL_COLS - 1);
-  let ty = Math.floor(grid.rows / 2);
-  if (!isTileFree(tx, ty)) {
-    outer:
-    for (let radius = 1; radius < Math.max(grid.cols, grid.rows); radius++) {
-      for (let dy = -radius; dy <= radius; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
-          const nx = tx + dx, ny = ty + dy;
-          if (isTileFree(nx, ny)) { tx = nx; ty = ny; break outer; }
-        }
-      }
-    }
-  }
-  player.tileX = tx; player.tileY = ty;
-  player.moving = false; player.dir = 'down';
-}
-
-function regenerateWorld() {
-  bgMap = generateBackground();
-  placeIcons();
-  placePlayer();
-}
-
-/* ==========================================================
-   SPIELER-ZUSTAND — echte Kachel-Bewegung (ein Feld pro Schritt)
-   ========================================================== */
-const DIR_VECTORS = {
-  up:    { dx: 0, dy: -1 },
-  down:  { dx: 0, dy: 1 },
-  left:  { dx: -1, dy: 0 },
-  right: { dx: 1, dy: 0 },
-};
-
-const player = {
-  tileX: 0, tileY: 0,
-  fromTileX: 0, fromTileY: 0, toTileX: 0, toTileY: 0,
-  dir: "down", moving: false, moveStart: 0,
-};
-
-let dirStack = [];
-function setDirState(dir, pressed) {
-  if (pressed) { if (!dirStack.includes(dir)) dirStack.push(dir); }
-  else { dirStack = dirStack.filter(d => d !== dir); }
-}
-function currentDesiredDir() { return dirStack.length ? dirStack[dirStack.length - 1] : null; }
-
-let dialogOpen = false;
-let activeStation = null;
-
-const KEY_TO_DIR = {
-  arrowup: 'up', w: 'up',
-  arrowdown: 'down', s: 'down',
-  arrowleft: 'left', a: 'left',
-  arrowright: 'right', d: 'right',
-};
-
-window.addEventListener('keydown', (e) => {
-  const k = e.key.toLowerCase();
-  if (KEY_TO_DIR[k]) setDirState(KEY_TO_DIR[k], true);
-  if (dialogOpen && (k === "enter" || k === " ")) { playSfxA(); confirmAction(); }
-  else if (dialogOpen && k === "escape") { playSfxB(); closeDialog(); }
-  else if (!dialogOpen && k === "enter") { playSfxA(); pressA(); }
-});
-window.addEventListener('keyup', (e) => {
-  const k = e.key.toLowerCase();
-  if (KEY_TO_DIR[k]) setDirState(KEY_TO_DIR[k], false);
-});
-
-function pressA() { tryInteract(); }
-function pressB() { if (dialogOpen) closeDialog(); }
-function confirmAction() { window.open(activeStation.url, "_blank"); closeDialog(); }
-
-function tryInteract() {
-  if (player.moving) return;
-  const v = DIR_VECTORS[player.dir];
-  const fx = player.tileX + v.dx, fy = player.tileY + v.dy;
-  const s = stations.find(st => st.tileX === fx && st.tileY === fy);
-  if (s) { dialogOpen = true; activeStation = s; setMusicFiltered(true); }
-}
-function closeDialog() { dialogOpen = false; activeStation = null; setMusicFiltered(false); }
-
-/* ==========================================================
-   BEDIENOBERFLÄCHE — Pointer Events statt reiner Touch-Events,
-   funktioniert dadurch mit Maus, Finger und Stift gleichzeitig,
-   und mehrere Buttons lassen sich gleichzeitig halten (Multitouch).
-   ========================================================== */
-function bindButton(id, onDown, onUp) {
-  const el = document.getElementById(id);
-  const down = (e) => { e.preventDefault(); el.classList.add('pressed'); onDown && onDown(); };
-  const up = (e) => { e.preventDefault(); el.classList.remove('pressed'); onUp && onUp(); };
-  el.addEventListener('pointerdown', down);
-  el.addEventListener('pointerup', up);
-  el.addEventListener('pointercancel', up);
-  el.addEventListener('pointerleave', up);
-}
-bindButton('dpad-up',    () => setDirState('up', true),    () => setDirState('up', false));
-bindButton('dpad-down',  () => setDirState('down', true),  () => setDirState('down', false));
-bindButton('dpad-left',  () => setDirState('left', true),  () => setDirState('left', false));
-bindButton('dpad-right', () => setDirState('right', true), () => setDirState('right', false));
-bindButton('btn-a', () => { playSfxA(); if (dialogOpen) confirmAction(); else pressA(); });
-bindButton('btn-b', () => { playSfxB(); pressB(); });
-
-// AudioContext darf laut Browser-Regeln erst nach einer echten
-// Nutzerinteraktion erzeugt werden — daher hier ganz allgemein auf den
-// allerersten Tastendruck/Tap irgendwo auf der Seite warten.
-window.addEventListener('keydown', initAudio, { once: true });
-window.addEventListener('pointerdown', initAudio, { once: true });
-
-/* ==========================================================
-   UPDATE — ein Kachel-Schritt nach dem anderen
-   ========================================================== */
-function update(t) {
-  if (dialogOpen) return;
-
-  if (player.moving) {
-    const prog = Math.min(1, (t - player.moveStart) / MOVE_TIME);
-    if (prog >= 1) {
-      player.tileX = player.toTileX;
-      player.tileY = player.toTileY;
-      player.moving = false;
-    }
-    return;
-  }
-
-  const dir = currentDesiredDir();
-  if (!dir) return;
-
-  player.dir = dir;
-  const v = DIR_VECTORS[dir];
-  const ntx = player.tileX + v.dx, nty = player.tileY + v.dy;
-  if (isTileFree(ntx, nty)) {
-    player.fromTileX = player.tileX; player.fromTileY = player.tileY;
-    player.toTileX = ntx; player.toTileY = nty;
-    player.moveStart = t;
-    player.moving = true;
-  }
-}
-
-/* ==========================================================
-   RENDERING
-   ========================================================== */
-
-// Bricht einen Text in Zeilen um, die maximal maxWidth breit sind
-// (ctx.font muss vorher gesetzt sein).
-function wrapText(context, text, maxWidth) {
-  const words = text.split(' ');
-  const lines = [];
-  let current = '';
-  for (const w of words) {
-    const test = current ? current + ' ' + w : w;
-    if (context.measureText(test).width > maxWidth && current) {
-      lines.push(current);
-      current = w;
-    } else {
-      current = test;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
-}
-
-function drawBackground() {
-  for (let r = 0; r < grid.rows; r++) {
-    for (let c = 0; c < grid.cols; c++) {
-      const x = c * grid.tileSize, y = r * grid.tileSize + grid.yOffset;
-
-      if (c >= grid.cols - RIGHT_WALL_COLS) {
-        // Wand-Spalte: eigenes Bild (z.B. Vorhang) oder ersatzweise ein
-        // gestreiftes Muster, damit die Sperre auch ohne Grafik erkennbar ist.
-        if (images.backgroundRight) {
-          ctx.drawImage(images.backgroundRight, x, y, grid.tileSize, grid.tileSize);
-        } else {
-          ctx.fillStyle = "#2a2a2a";
-          ctx.fillRect(x, y, grid.tileSize, grid.tileSize);
-          ctx.strokeStyle = "#444";
-          ctx.lineWidth = Math.max(1, grid.tileSize * 0.08);
-          const stripes = 4;
-          for (let i = 0; i < stripes; i++) {
-            const lx = x + ((i + 0.5) / stripes) * grid.tileSize;
-            ctx.beginPath();
-            ctx.moveTo(lx, y);
-            ctx.lineTo(lx, y + grid.tileSize);
-            ctx.stroke();
-          }
-        }
-        continue;
-      }
-
-      const idx = bgMap[r] ? bgMap[r][c] : 0;
-      const img = images.background[idx];
-      if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
-      else { ctx.fillStyle = idx % 2 === 0 ? "#f4f4f4" : "#eaeaea"; ctx.fillRect(x, y, grid.tileSize, grid.tileSize); }
-    }
-  }
-}
-
-// Größe des "neu"-Badges relativ zur Kachelgröße, und wie weit es über den
-// oberen/rechten Rand des Icons hinausragt (0 = bündig, >0 = ragt raus).
-const NEW_BADGE_SCALE = 0.42;
-const NEW_BADGE_OVERHANG = 0.28;
-
-function drawNewBadge(x, y) {
-  const size = grid.tileSize * NEW_BADGE_SCALE;
-  const overhang = grid.tileSize * NEW_BADGE_OVERHANG;
-  // Ankerpunkt: oben rechts an der Icon-Kachel, leicht nach außen versetzt.
-  const bx = x + grid.tileSize - size + overhang;
-  const by = y - overhang;
-  if (images.newBadge) {
-    ctx.drawImage(images.newBadge, bx, by, size, size);
-  } else {
-    // Fallback ohne eigene Grafik: schwarzer Kreis mit weißem "!"
-    ctx.beginPath();
-    ctx.arc(bx + size / 2, by + size / 2, size / 2, 0, Math.PI * 2);
-    ctx.fillStyle = "#000";
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.font = `${Math.round(size * 0.6)}px 'Press Start 2P', monospace`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("!", bx + size / 2, by + size / 2 + 1);
-    ctx.textAlign = "left";
-    ctx.textBaseline = "alphabetic";
-  }
-}
-
-function drawIcons() {
-  stations.forEach(s => {
-    const x = s.tileX * grid.tileSize, y = s.tileY * grid.tileSize + grid.yOffset;
-    const img = images.icons[s.icon];
-    if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
-    else drawFallback(FALLBACK_ICON, x + grid.tileSize / 2, y + grid.tileSize / 2, grid.tileSize);
-    if (s.isNew) drawNewBadge(x, y);
-  });
-}
-
-function drawPlayer(t) {
-  let tx = player.tileX, ty = player.tileY;
-  if (player.moving) {
-    const prog = Math.min(1, (t - player.moveStart) / MOVE_TIME);
-    tx = player.fromTileX + (player.toTileX - player.fromTileX) * prog;
-    ty = player.fromTileY + (player.toTileY - player.fromTileY) * prog;
-  }
-  const x = tx * grid.tileSize, y = ty * grid.tileSize + grid.yOffset;
-  const frames = images.player[player.dir];
-  const walkPhase = Math.floor(t / WALK_FRAME_TIME) % 2;
-  const img = frames ? (player.moving ? (walkPhase === 0 ? frames.l : frames.r) : frames.stand) : null;
-  if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
-  else drawFallback(FALLBACK_PLAYER, x + grid.tileSize / 2, y + grid.tileSize / 2, grid.tileSize);
-}
-
-// Zentrierter Titel im oberen Rand
-function drawTopBar() {
-  ctx.fillStyle = BAR_TEXT_COLOR;
-  ctx.font = "10px 'Press Start 2P', monospace";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(UI_TEXT.title, grid.width / 2, grid.barHeight / 2);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "alphabetic";
-}
-
-function drawDialog() {
-  const maxW = Math.min(grid.width - 24, 420);
-  const paddingX = 14, paddingY = 14, lineHeight = 14, hintGap = 10, hintLineHeight = 11;
-
-  ctx.font = "10px 'Press Start 2P', monospace";
-  const mainText = (activeStation.text && activeStation.text.trim()) ? activeStation.text.trim() : activeStation.label;
-  const lines = wrapText(ctx, mainText, maxW - paddingX * 2);
-
-  ctx.font = "8px 'Press Start 2P', monospace";
-  const hintLines = wrapText(ctx, UI_TEXT.interactHint, maxW - paddingX * 2);
-
-  const bw = maxW;
-  const bh = paddingY * 2 + lines.length * lineHeight + hintGap + hintLines.length * hintLineHeight;
-  const bx = (grid.width - bw) / 2;
-  const gridBottom = grid.height - grid.barHeight; // untere Kante des Spielfelds (= Rand-Beginn)
-  const by = gridBottom - bh - 12;
-
-  ctx.fillStyle = "#fff"; ctx.fillRect(bx, by, bw, bh);
-  ctx.strokeStyle = "#000"; ctx.lineWidth = 3; ctx.strokeRect(bx, by, bw, bh);
-  ctx.fillStyle = "#000";
-
-  ctx.font = "10px 'Press Start 2P', monospace";
-  lines.forEach((line, i) => ctx.fillText(line, bx + paddingX, by + paddingY + (i + 1) * lineHeight - 4));
-
-  ctx.font = "8px 'Press Start 2P', monospace";
-  const hintStartY = by + paddingY + lines.length * lineHeight + hintGap;
-  hintLines.forEach((line, i) => ctx.fillText(line, bx + paddingX, hintStartY + i * hintLineHeight));
-}
-
-function draw(t) {
-  // Kompletten Canvas jeden Frame in BAR_COLOR löschen — der obere/untere
-  // Rand bleibt dadurch automatisch in dieser Farbe, ohne separat
-  // gezeichnet zu werden (das Spielfeld wird direkt danach darüber gemalt).
-  ctx.fillStyle = BAR_COLOR;
-  ctx.fillRect(0, 0, grid.width, grid.height);
-
-  drawBackground();
-  drawIcons();
-  drawPlayer(t);
-  drawTopBar();
-  if (dialogOpen) drawDialog();
-}
-
-function loop(t) {
-  update(t);
-  draw(t);
-  requestAnimationFrame(loop);
-}
-
-/* ==========================================================
-   RESPONSIVE — oben und unten bleibt ein Rand frei, der ungefähr
-   so groß ist wie die Bedienelemente (CONTROL_AREA_HEIGHT), an das
-   Bildschirmformat angepasst (relativ zur Höhe geklammert). Das
-   Kachelraster (6–12 pro Seite, ~50–100 gesamt) wird aus der
-   verbleibenden Höhe berechnet, und der tatsächliche Rand ergibt
-   sich anschließend aus dem Rest — dadurch ist das Spielfeld immer
-   exakt vertikal zentriert, ohne dass eine Kachel abgeschnitten wird.
-   ========================================================== */
-function resize() {
-  const dpr = window.devicePixelRatio || 1;
-  const w = window.innerWidth, h = window.innerHeight;
-
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
-  canvas.style.width = w + "px";
-  canvas.style.height = h + "px";
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.imageSmoothingEnabled = false;
-
-  // Zielrand: ungefähr CONTROL_AREA_HEIGHT groß, aber auf sehr flachen
-  // Screens nicht zu dominant und auf sehr hohen nicht zu winzig.
-  const targetBar = clamp(CONTROL_AREA_HEIGHT, h * 0.12, h * 0.22);
-  const availableHeight = Math.max(h * 0.4, h - targetBar * 2);
-
-  const roughTileSize = Math.sqrt((w * availableHeight) / TARGET_TILE_COUNT);
-  const cols = clamp(Math.round(w / roughTileSize), MIN_TILES_PER_SIDE, MAX_TILES_PER_SIDE);
-  const rows = clamp(Math.round(availableHeight / roughTileSize), MIN_TILES_PER_SIDE, MAX_TILES_PER_SIDE);
-  const tileSize = (w / cols + availableHeight / rows) / 2;
-
-  const finalCols = Math.ceil(w / tileSize);
-  const finalRows = Math.round(availableHeight / tileSize);
-
-  // Tatsächlicher Rand = Rest, der nach dem Kacheln übrig bleibt.
-  const barHeight = (h - finalRows * tileSize) / 2;
-
-  const gridChanged = (finalCols !== grid.cols || finalRows !== grid.rows);
-  grid = { cols: finalCols, rows: finalRows, tileSize, width: w, height: h, yOffset: barHeight, barHeight };
-
-  if (gridChanged) regenerateWorld();
-}
-window.addEventListener('resize', resize);
-window.addEventListener('orientationchange', resize);
-
-resize();
-loadAssets().then(() => requestAnimationFrame(loop));
+  document.getElementById('reveal-screen').addEventListener('pointerdown', reveal);
+  window.addEventListener('keydown', reveal, { once: true });
 </script>
 </body>
 </html>
