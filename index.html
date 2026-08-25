@@ -129,13 +129,6 @@ const CONTROL_AREA_HEIGHT = 150;
 // 2 bedeutet: zwischen zwei Icons liegt immer mindestens ein freies Feld.
 const MIN_ICON_TILE_GAP = 2;
 
-// Die rechte(n) Spalte(n) sind eine unsichtbare Wand: dort kann der
-// Charakter nicht hinlaufen und es spawnen keine Icons. Das behebt einen
-// Rundungseffekt, durch den das Raster rechts leicht über den sichtbaren
-// Bildschirm hinausragen kann (Math.ceil beim Spalten-Runden weiter unten) —
-// ohne diese Wand könnte man in diese (teils unsichtbare) Spalte hineinlaufen.
-const RIGHT_WALL_COLS = 1;
-
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
 /* ==========================================================
@@ -145,9 +138,21 @@ function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
    - Sobald ein Dialogfenster offen ist, wird ein Tiefpassfilter
      (="Highcut") auf die Musik gelegt, damit sie gedämpft im
      Hintergrund weiterläuft; beim Schließen geht sie wieder normal.
+     Der Übergang (sowohl beim Öffnen als auch beim Schließen) ist ein
+     sanfter halbsekündiger Fade (siehe FILTER_RAMP_SECONDS).
+   - Sobald der Spieler eine Station bestätigt (A im Dialog, öffnet den
+     Link) fadet die komplette Hintergrundmusik innerhalb von
+     MUSIC_FADEOUT_SECONDS auf Lautstärke 0 — der Spieler wird ja gerade
+     auf eine andere Seite weitergeleitet. Als Absicherung passiert das
+     auch beim "pagehide"-Event, falls irgendwann doch im selben Tab
+     navigiert wird.
    - A/B geben bei jedem Tastendruck (Taste oder Touch-Button, auch
      wenn gerade kein Dialog offen ist) jeweils einen kurzen Oneshot-
      Sound aus (sfx_a.mp3 / sfx_b.mp3).
+   - Bei jedem Laufschritt-Frame (Wechsel zwischen den beiden
+     Lauf-Sprites links/rechts) wird zufällig einer von 5
+     Schritt-Sounds als Oneshot abgespielt (sfx_walk_1.mp3 …
+     sfx_walk_5.mp3).
    - Browser verbieten Autoplay mit Ton ohne Nutzerinteraktion, daher
      wird der AudioContext erst beim allerersten Tastendruck/Tap
      erzeugt (siehe initAudio() weiter unten, aufgerufen von einem
@@ -157,14 +162,26 @@ const AUDIO_PATHS = {
   bgMusic: "assets/music_bg.mp3",
   sfxA: "assets/sfx_a.mp3",
   sfxB: "assets/sfx_b.mp3",
+  walk: [
+    "assets/sfx_walk_1.mp3",
+    "assets/sfx_walk_2.mp3",
+    "assets/sfx_walk_3.mp3",
+    "assets/sfx_walk_4.mp3",
+    "assets/sfx_walk_5.mp3",
+  ],
 };
 const FILTER_FREQ_OPEN = 18000;   // praktisch kein Cut (Dialog geschlossen)
 const FILTER_FREQ_CLOSED = 700;   // deutlicher Highcut (Dialog offen)
-const FILTER_RAMP_SECONDS = 0.25; // sanfter Übergang statt hartem Schnitt
+const FILTER_RAMP_SECONDS = 0.5;  // sanfter halbsekündiger Übergang statt hartem Schnitt
+
+// Dauer, in der die Hintergrundmusik komplett ausgefadet wird, sobald der
+// Nutzer über einen Link auf eine andere Seite weitergeleitet wird.
+const MUSIC_FADEOUT_SECONDS = 1;
 
 let audioCtx = null;
 let bgMusicEl = null;
 let bgFilterNode = null;
+let bgGainNode = null;
 let audioInitialized = false;
 
 function initAudio() {
@@ -183,7 +200,10 @@ function initAudio() {
     bgFilterNode.type = "lowpass";
     bgFilterNode.frequency.value = FILTER_FREQ_OPEN;
 
-    source.connect(bgFilterNode).connect(audioCtx.destination);
+    bgGainNode = audioCtx.createGain();
+    bgGainNode.gain.value = 1;
+
+    source.connect(bgFilterNode).connect(bgGainNode).connect(audioCtx.destination);
 
     // Falls die Datei fehlt, bricht play() einfach lautlos ab (kein Fehler-Popup).
     bgMusicEl.play().catch(() => {});
@@ -193,7 +213,8 @@ function initAudio() {
   }
 }
 
-// Steuert den Highcut-Filter der Hintergrundmusik.
+// Steuert den Highcut-Filter der Hintergrundmusik (sanfter Fade über
+// FILTER_RAMP_SECONDS, sowohl beim Rein- als auch beim Rausfiltern).
 function setMusicFiltered(isFiltered) {
   if (!audioCtx || !bgFilterNode) return;
   if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
@@ -202,6 +223,17 @@ function setMusicFiltered(isFiltered) {
   bgFilterNode.frequency.cancelScheduledValues(now);
   bgFilterNode.frequency.setValueAtTime(bgFilterNode.frequency.value, now);
   bgFilterNode.frequency.linearRampToValueAtTime(target, now + FILTER_RAMP_SECONDS);
+}
+
+// Fadet die Hintergrundmusik komplett auf Lautstärke 0 (z.B. wenn der
+// Nutzer über einen Stationslink weitergeleitet wird).
+function fadeOutMusicCompletely(seconds) {
+  if (!audioCtx || !bgGainNode) return;
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  const now = audioCtx.currentTime;
+  bgGainNode.gain.cancelScheduledValues(now);
+  bgGainNode.gain.setValueAtTime(bgGainNode.gain.value, now);
+  bgGainNode.gain.linearRampToValueAtTime(0, now + seconds);
 }
 
 // Spielt einen kurzen Sound als Oneshot ab (eigenes Audio-Element pro Aufruf,
@@ -215,6 +247,14 @@ function playSfx(path) {
 function playSfxA() { if (audioInitialized) playSfx(AUDIO_PATHS.sfxA); }
 function playSfxB() { if (audioInitialized) playSfx(AUDIO_PATHS.sfxB); }
 
+// Wählt zufällig einen der 5 Schritt-Sounds aus und spielt ihn als Oneshot.
+function playRandomWalkSfx() {
+  if (!audioInitialized) return;
+  const paths = AUDIO_PATHS.walk;
+  const path = paths[Math.floor(Math.random() * paths.length)];
+  playSfx(path);
+}
+
 // Dauer eines einzelnen Kachel-Schritts in Millisekunden (klassische
 // Tile-Bewegung à la Pokémon/Zelda — konstant, unabhängig von der
 // tatsächlichen Pixelgröße der Kacheln).
@@ -227,7 +267,8 @@ const ctx = canvas.getContext('2d');
 
 // Aktueller Grid-Zustand, wird bei jedem Resize neu berechnet.
 // yOffset/barHeight = Höhe des freien Rands oben (= unten, exakt gleich groß).
-let grid = { cols: 0, rows: 0, tileSize: 0, width: 0, height: 0, yOffset: 0, barHeight: 0 };
+// xOffset = Breite des freien Rands links (= rechts, exakt gleich groß).
+let grid = { cols: 0, rows: 0, tileSize: 0, width: 0, height: 0, yOffset: 0, barHeight: 0, xOffset: 0 };
 
 /* ==========================================================
    TEXTE — hier zentral änderbar (z.B. für eine andere Sprache
@@ -235,16 +276,27 @@ let grid = { cols: 0, rows: 0, tileSize: 0, width: 0, height: 0, yOffset: 0, bar
    ========================================================== */
 const UI_TEXT = {
   // Text, der zentriert im oberen Rand steht
-  title: "use the directional buttons to move around and press a to interact with the icons. the different icons will redirect you to my socials. thx for coming by :)!",
+  title: "ludo_links",
   // Hinweistext im Dialogfenster, erscheint bei jedem Icon gleich
   interactHint: "A: open   B: close",
 };
 
-// Farbe des oberen/unteren Rands und der Schrift darin (auch der Titel
-// oben verwendet BAR_TEXT_COLOR). Jeder gültige CSS-Farbwert geht,
+// Farbe des oberen/unteren/seitlichen Rands und der Schrift darin (auch der
+// Titel oben verwendet BAR_TEXT_COLOR). Jeder gültige CSS-Farbwert geht,
 // z.B. auch "#f5c400" oder "rgb(20,20,20)".
 const BAR_COLOR = "#000000";
 const BAR_TEXT_COLOR = "#ffffff";
+
+// Ladeseite (der #loading-Bildschirm, der bis zum vollständigen Laden aller
+// Assets sichtbar ist) — genauso frei änderbar wie Text/Farben des Rands.
+const LOADING_TEXT = "lädt…";
+const LOADING_BG_COLOR = "#ffffff";
+const LOADING_TEXT_COLOR = "#000000";
+
+const loadingEl = document.getElementById('loading');
+loadingEl.textContent = LOADING_TEXT;
+loadingEl.style.background = LOADING_BG_COLOR;
+loadingEl.style.color = LOADING_TEXT_COLOR;
 
 /* ==========================================================
    ASSETS
@@ -273,13 +325,6 @@ const BAR_TEXT_COLOR = "#ffffff";
      background_1.png / background_2.png / background_3.png /
      background_4.png / background_5.png
 
-   WAND — die rechte(n) Spalte(n) (siehe RIGHT_WALL_COLS) sind für den
-   Charakter gesperrt und bekommen statt eines normalen Hintergrunds
-   immer dieses eine Bild, z.B. ein Vorhang-Motiv:
-     background_right.png (optional — fehlt sie, wird stattdessen ein
-     einfaches gestreiftes Muster gezeichnet, die Wand bleibt trotzdem
-     immer gesperrt, unabhängig davon ob die Grafik vorhanden ist)
-
    STEUERELEMENTE (optional — fehlen sie, bleiben die aktuellen
    CSS-Buttons mit Pfeil-Dreiecken/Buchstaben einfach bestehen):
      btn_up.png    btn_down.png    btn_left.png    btn_right.png
@@ -289,12 +334,15 @@ const BAR_TEXT_COLOR = "#ffffff";
    kleiner schwarzer Punkt oben rechts am Icon gezeichnet):
      new.png — wird oben rechts über jedes Icon gelegt, bei dem
      in der stations-Liste weiter unten isNew: true gesetzt ist.
+     Wird immer ganz zuoberst gezeichnet (auch vor dem Spieler-Sprite).
 
    AUDIO (optional — fehlen die Dateien, bleibt die Seite einfach
    stumm, es gibt keine Fehler):
      music_bg.mp3 — Hintergrundmusik der Hauptseite, läuft in Dauerschleife
      sfx_a.mp3    — kurzer Sound, der bei jedem Druck auf A abgespielt wird
      sfx_b.mp3    — kurzer Sound, der bei jedem Druck auf B abgespielt wird
+     sfx_walk_1.mp3 … sfx_walk_5.mp3 — Schritt-Sounds, bei jedem Laufschritt
+       wird zufällig einer davon als Oneshot abgespielt
    ========================================================== */
 const ASSET_PATHS = {
   player: {
@@ -310,7 +358,6 @@ const ASSET_PATHS = {
     "assets/background_4.png",
     "assets/background_5.png",
   ],
-  backgroundRight: "assets/background_right.png",
   newBadge: "assets/new.png",
   controls: {
     up:    "assets/btn_up.png",
@@ -328,12 +375,12 @@ const BG_WEIGHTS = [50, 20, 30, 0, 0];
 /* ==========================================================
    HIER DEINE LINKS (UND TEXTE) EINTRAGEN
    Jede Station braucht:
-     label - Anzeigename, wird als Standardtext im Dialog verwendet
+     label - Anzeigename, wird als fett gedruckter Titel im Dialog verwendet
      icon  - muss zu "icon_<icon>.png" passen
      url   - Ziel-Link, öffnet sich bei Bestätigung mit A
-     text  - eigener Text fürs Dialogfeld, z.B. "Hör mal in meinen
-             neuen Track rein!". Leer lassen (""), um stattdessen
-             einfach "label" als Standardtext zu zeigen.
+     text  - eigener Beschreibungstext fürs Dialogfeld, steht unter dem
+             Titel, z.B. "Hör mal in meinen neuen Track rein!". Leer
+             lassen (""), um nur den Titel ohne Beschreibungstext zu zeigen.
      isNew - true/false (bzw. 1/0 funktioniert genauso, da JS beides
              als "wahr"/"falsch" behandelt). Bei true wird oben rechts
              über dem Icon die Grafik new.png eingeblendet, bei false
@@ -397,7 +444,7 @@ function applyButtonImage(id, img) {
   el.appendChild(im);
 }
 
-const images = { player: {}, icons: {}, background: [], backgroundRight: null, newBadge: null };
+const images = { player: {}, icons: {}, background: [], newBadge: null };
 
 async function loadAssets() {
   for (const dir of ["down", "up", "left", "right"]) {
@@ -414,7 +461,6 @@ async function loadAssets() {
   for (const path of ASSET_PATHS.background) {
     images.background.push(await loadImage(path));
   }
-  images.backgroundRight = await loadImage(ASSET_PATHS.backgroundRight);
   images.newBadge = await loadImage(ASSET_PATHS.newBadge);
   const c = ASSET_PATHS.controls;
   applyButtonImage('dpad-up', await loadImage(c.up));
@@ -453,20 +499,18 @@ function generateBackground() {
 
 function isTileFree(tx, ty) {
   if (tx < 0 || tx >= grid.cols || ty < 0 || ty >= grid.rows) return false;
-  if (tx >= grid.cols - RIGHT_WALL_COLS) return false; // rechte Wand-Spalte(n)
   return !stations.some(s => s.tileX === tx && s.tileY === ty);
 }
 
 // Platziert alle Icons mit garantiertem Mindestabstand zueinander (Icons
-// dürfen jetzt im ganzen Raster liegen — die Bedienelemente sitzen im
-// eigenen Rand außerhalb des Spielfelds, es braucht also keine tabu-Reihen
-// mehr wie in der Vorversion). Statt reinem Zufalls-Sampling wird die
-// Liste aller Felder gemischt und dann deterministisch nach freien,
-// ausreichend entfernten Feldern durchsucht.
+// dürfen im ganzen Raster liegen — die Bedienelemente sitzen im eigenen
+// Rand außerhalb des Spielfelds, es braucht also keine tabu-Felder). Statt
+// reinem Zufalls-Sampling wird die Liste aller Felder gemischt und dann
+// deterministisch nach freien, ausreichend entfernten Feldern durchsucht.
 function placeIcons() {
   const allTiles = [];
   for (let r = 0; r < grid.rows; r++)
-    for (let c = 0; c < grid.cols - RIGHT_WALL_COLS; c++) allTiles.push({ tx: c, ty: r });
+    for (let c = 0; c < grid.cols; c++) allTiles.push({ tx: c, ty: r });
 
   for (let i = allTiles.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -492,7 +536,7 @@ function placeIcons() {
 }
 
 function placePlayer() {
-  let tx = Math.min(Math.floor(grid.cols / 2), grid.cols - RIGHT_WALL_COLS - 1);
+  let tx = Math.min(Math.floor(grid.cols / 2), grid.cols - 1);
   let ty = Math.floor(grid.rows / 2);
   if (!isTileFree(tx, ty)) {
     outer:
@@ -529,6 +573,7 @@ const player = {
   tileX: 0, tileY: 0,
   fromTileX: 0, fromTileY: 0, toTileX: 0, toTileY: 0,
   dir: "down", moving: false, moveStart: 0,
+  lastWalkPhase: null, // welcher Lauf-Frame (0/1) zuletzt einen Schritt-Sound ausgelöst hat
 };
 
 let dirStack = [];
@@ -562,7 +607,12 @@ window.addEventListener('keyup', (e) => {
 
 function pressA() { tryInteract(); }
 function pressB() { if (dialogOpen) closeDialog(); }
-function confirmAction() { window.open(activeStation.url, "_blank"); closeDialog(); }
+function confirmAction() {
+  // Der Nutzer wird jetzt weitergeleitet — Musik komplett ausfaden.
+  fadeOutMusicCompletely(MUSIC_FADEOUT_SECONDS);
+  window.open(activeStation.url, "_blank");
+  closeDialog();
+}
 
 function tryInteract() {
   if (player.moving) return;
@@ -572,6 +622,10 @@ function tryInteract() {
   if (s) { dialogOpen = true; activeStation = s; setMusicFiltered(true); }
 }
 function closeDialog() { dialogOpen = false; activeStation = null; setMusicFiltered(false); }
+
+// Absicherung: falls die Seite doch mal im selben Tab verlassen wird,
+// die Musik ebenfalls ausfaden.
+window.addEventListener('pagehide', () => fadeOutMusicCompletely(MUSIC_FADEOUT_SECONDS));
 
 /* ==========================================================
    BEDIENOBERFLÄCHE — Pointer Events statt reiner Touch-Events,
@@ -607,11 +661,20 @@ function update(t) {
   if (dialogOpen) return;
 
   if (player.moving) {
+    // Bei jedem Wechsel des Lauf-Frames (links/rechts) einen zufälligen
+    // Schritt-Sound abspielen.
+    const walkPhase = Math.floor(t / WALK_FRAME_TIME) % 2;
+    if (walkPhase !== player.lastWalkPhase) {
+      player.lastWalkPhase = walkPhase;
+      playRandomWalkSfx();
+    }
+
     const prog = Math.min(1, (t - player.moveStart) / MOVE_TIME);
     if (prog >= 1) {
       player.tileX = player.toTileX;
       player.tileY = player.toTileY;
       player.moving = false;
+      player.lastWalkPhase = null;
     }
     return;
   }
@@ -627,6 +690,7 @@ function update(t) {
     player.toTileX = ntx; player.toTileY = nty;
     player.moveStart = t;
     player.moving = true;
+    player.lastWalkPhase = null; // sorgt dafür, dass der erste Frame sofort einen Sound auslöst
   }
 }
 
@@ -656,30 +720,7 @@ function wrapText(context, text, maxWidth) {
 function drawBackground() {
   for (let r = 0; r < grid.rows; r++) {
     for (let c = 0; c < grid.cols; c++) {
-      const x = c * grid.tileSize, y = r * grid.tileSize + grid.yOffset;
-
-      if (c >= grid.cols - RIGHT_WALL_COLS) {
-        // Wand-Spalte: eigenes Bild (z.B. Vorhang) oder ersatzweise ein
-        // gestreiftes Muster, damit die Sperre auch ohne Grafik erkennbar ist.
-        if (images.backgroundRight) {
-          ctx.drawImage(images.backgroundRight, x, y, grid.tileSize, grid.tileSize);
-        } else {
-          ctx.fillStyle = "#2a2a2a";
-          ctx.fillRect(x, y, grid.tileSize, grid.tileSize);
-          ctx.strokeStyle = "#444";
-          ctx.lineWidth = Math.max(1, grid.tileSize * 0.08);
-          const stripes = 4;
-          for (let i = 0; i < stripes; i++) {
-            const lx = x + ((i + 0.5) / stripes) * grid.tileSize;
-            ctx.beginPath();
-            ctx.moveTo(lx, y);
-            ctx.lineTo(lx, y + grid.tileSize);
-            ctx.stroke();
-          }
-        }
-        continue;
-      }
-
+      const x = c * grid.tileSize + grid.xOffset, y = r * grid.tileSize + grid.yOffset;
       const idx = bgMap[r] ? bgMap[r][c] : 0;
       const img = images.background[idx];
       if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
@@ -719,11 +760,21 @@ function drawNewBadge(x, y) {
 
 function drawIcons() {
   stations.forEach(s => {
-    const x = s.tileX * grid.tileSize, y = s.tileY * grid.tileSize + grid.yOffset;
+    const x = s.tileX * grid.tileSize + grid.xOffset, y = s.tileY * grid.tileSize + grid.yOffset;
     const img = images.icons[s.icon];
     if (img) ctx.drawImage(img, x, y, grid.tileSize, grid.tileSize);
     else drawFallback(FALLBACK_ICON, x + grid.tileSize / 2, y + grid.tileSize / 2, grid.tileSize);
-    if (s.isNew) drawNewBadge(x, y);
+  });
+}
+
+// Zeichnet alle "neu"-Badges — wird bewusst separat und ganz zuletzt
+// aufgerufen (nach dem Spieler), damit die Badges immer ganz im
+// Vordergrund liegen, auch wenn der Spieler direkt vor/auf dem Icon steht.
+function drawNewBadges() {
+  stations.forEach(s => {
+    if (!s.isNew) return;
+    const x = s.tileX * grid.tileSize + grid.xOffset, y = s.tileY * grid.tileSize + grid.yOffset;
+    drawNewBadge(x, y);
   });
 }
 
@@ -734,7 +785,7 @@ function drawPlayer(t) {
     tx = player.fromTileX + (player.toTileX - player.fromTileX) * prog;
     ty = player.fromTileY + (player.toTileY - player.fromTileY) * prog;
   }
-  const x = tx * grid.tileSize, y = ty * grid.tileSize + grid.yOffset;
+  const x = tx * grid.tileSize + grid.xOffset, y = ty * grid.tileSize + grid.yOffset;
   const frames = images.player[player.dir];
   const walkPhase = Math.floor(t / WALK_FRAME_TIME) % 2;
   const img = frames ? (player.moving ? (walkPhase === 0 ? frames.l : frames.r) : frames.stand) : null;
@@ -753,19 +804,33 @@ function drawTopBar() {
   ctx.textBaseline = "alphabetic";
 }
 
+// Dialogfenster: fett gedruckter Titel (Stationsname) oben, darunter der
+// Beschreibungstext, ganz unten die Interaktionsmöglichkeiten (Hinweistext).
 function drawDialog() {
   const maxW = Math.min(grid.width - 24, 420);
-  const paddingX = 14, paddingY = 14, lineHeight = 14, hintGap = 10, hintLineHeight = 11;
+  const paddingX = 14, paddingY = 14;
+  const titleLineHeight = 16, textLineHeight = 14, sectionGap = 10, hintLineHeight = 11;
+  const innerW = maxW - paddingX * 2;
 
-  ctx.font = "10px 'Press Start 2P', monospace";
-  const mainText = (activeStation.text && activeStation.text.trim()) ? activeStation.text.trim() : activeStation.label;
-  const lines = wrapText(ctx, mainText, maxW - paddingX * 2);
+  const titleFont = "bold 11px 'Press Start 2P', monospace";
+  const textFont = "10px 'Press Start 2P', monospace";
+  const hintFont = "8px 'Press Start 2P', monospace";
 
-  ctx.font = "8px 'Press Start 2P', monospace";
-  const hintLines = wrapText(ctx, UI_TEXT.interactHint, maxW - paddingX * 2);
+  ctx.font = titleFont;
+  const titleLines = wrapText(ctx, activeStation.label, innerW);
+
+  const descText = (activeStation.text || "").trim();
+  ctx.font = textFont;
+  const descLines = descText ? wrapText(ctx, descText, innerW) : [];
+
+  ctx.font = hintFont;
+  const hintLines = wrapText(ctx, UI_TEXT.interactHint, innerW);
 
   const bw = maxW;
-  const bh = paddingY * 2 + lines.length * lineHeight + hintGap + hintLines.length * hintLineHeight;
+  const bh = paddingY * 2
+    + titleLines.length * titleLineHeight
+    + (descLines.length ? sectionGap + descLines.length * textLineHeight : 0)
+    + sectionGap + hintLines.length * hintLineHeight;
   const bx = (grid.width - bw) / 2;
   const gridBottom = grid.height - grid.barHeight; // untere Kante des Spielfelds (= Rand-Beginn)
   const by = gridBottom - bh - 12;
@@ -774,24 +839,34 @@ function drawDialog() {
   ctx.strokeStyle = "#000"; ctx.lineWidth = 3; ctx.strokeRect(bx, by, bw, bh);
   ctx.fillStyle = "#000";
 
-  ctx.font = "10px 'Press Start 2P', monospace";
-  lines.forEach((line, i) => ctx.fillText(line, bx + paddingX, by + paddingY + (i + 1) * lineHeight - 4));
+  let cursorY = by + paddingY;
 
-  ctx.font = "8px 'Press Start 2P', monospace";
-  const hintStartY = by + paddingY + lines.length * lineHeight + hintGap;
-  hintLines.forEach((line, i) => ctx.fillText(line, bx + paddingX, hintStartY + i * hintLineHeight));
+  ctx.font = titleFont;
+  titleLines.forEach(line => { cursorY += titleLineHeight; ctx.fillText(line, bx + paddingX, cursorY - 4); });
+
+  if (descLines.length) {
+    cursorY += sectionGap;
+    ctx.font = textFont;
+    descLines.forEach(line => { cursorY += textLineHeight; ctx.fillText(line, bx + paddingX, cursorY - 4); });
+  }
+
+  cursorY += sectionGap;
+  ctx.font = hintFont;
+  hintLines.forEach(line => { cursorY += hintLineHeight; ctx.fillText(line, bx + paddingX, cursorY - 4); });
 }
 
 function draw(t) {
   // Kompletten Canvas jeden Frame in BAR_COLOR löschen — der obere/untere
-  // Rand bleibt dadurch automatisch in dieser Farbe, ohne separat
-  // gezeichnet zu werden (das Spielfeld wird direkt danach darüber gemalt).
+  // Rand UND die seitlichen Ränder links/rechts vom Spielfeld bleiben
+  // dadurch automatisch in dieser Farbe, ohne separat gezeichnet zu werden
+  // (das Spielfeld wird direkt danach zentriert darüber gemalt).
   ctx.fillStyle = BAR_COLOR;
   ctx.fillRect(0, 0, grid.width, grid.height);
 
   drawBackground();
   drawIcons();
   drawPlayer(t);
+  drawNewBadges(); // ganz zuletzt vor der UI -> immer im Vordergrund, auch vor dem Spieler
   drawTopBar();
   if (dialogOpen) drawDialog();
 }
@@ -803,13 +878,25 @@ function loop(t) {
 }
 
 /* ==========================================================
-   RESPONSIVE — oben und unten bleibt ein Rand frei, der ungefähr
-   so groß ist wie die Bedienelemente (CONTROL_AREA_HEIGHT), an das
-   Bildschirmformat angepasst (relativ zur Höhe geklammert). Das
-   Kachelraster (6–12 pro Seite, ~50–100 gesamt) wird aus der
-   verbleibenden Höhe berechnet, und der tatsächliche Rand ergibt
-   sich anschließend aus dem Rest — dadurch ist das Spielfeld immer
-   exakt vertikal zentriert, ohne dass eine Kachel abgeschnitten wird.
+   RESPONSIVE — Ziel: das größtmögliche Kachelraster (grob
+   TARGET_TILE_COUNT Kacheln, 6–12 pro Seite, siehe oben), das ohne
+   Überstand komplett auf den Bildschirm passt, und das exakt
+   zentriert dargestellt wird — sowohl vertikal als auch horizontal.
+
+   Ablauf:
+   1) Aus Bildschirmbreite/-höhe wird eine grobe Zielkachelgröße
+      berechnet (TARGET_TILE_COUNT Kacheln auf die verfügbare Fläche
+      verteilt, verfügbare Höhe = Bildschirmhöhe minus zweimal
+      CONTROL_AREA_HEIGHT-artigem Rand).
+   2) Spalten/Reihen werden daraus abgeleitet und auf 6–12 begrenzt.
+   3) Die tatsächliche Kachelgröße ist das Minimum aus
+      (Breite / Spalten) und (verfügbare Höhe / Reihen) — dadurch ist
+      garantiert, dass das Raster in beide Richtungen hineinpasst und
+      nie über den Bildschirm hinausragt.
+   4) Der jeweils übrige Platz (rechts+links bzw. oben+unten) wird
+      gleichmäßig als Rand aufgeteilt -> Spielfeld ist immer exakt
+      zentriert, mit gleich breiten/hohen Rändern auf beiden Seiten,
+      alle in BAR_COLOR.
    ========================================================== */
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -830,16 +917,17 @@ function resize() {
   const roughTileSize = Math.sqrt((w * availableHeight) / TARGET_TILE_COUNT);
   const cols = clamp(Math.round(w / roughTileSize), MIN_TILES_PER_SIDE, MAX_TILES_PER_SIDE);
   const rows = clamp(Math.round(availableHeight / roughTileSize), MIN_TILES_PER_SIDE, MAX_TILES_PER_SIDE);
-  const tileSize = (w / cols + availableHeight / rows) / 2;
 
-  const finalCols = Math.ceil(w / tileSize);
-  const finalRows = Math.round(availableHeight / tileSize);
+  // Kleineres der beiden Verhältnisse -> Raster ragt garantiert in keine
+  // Richtung über den Bildschirm hinaus; die jeweils andere Achse bekommt
+  // dadurch automatisch einen (symmetrischen) Rand.
+  const tileSize = Math.min(w / cols, availableHeight / rows);
 
-  // Tatsächlicher Rand = Rest, der nach dem Kacheln übrig bleibt.
-  const barHeight = (h - finalRows * tileSize) / 2;
+  const barHeight = (h - rows * tileSize) / 2;
+  const xOffset = (w - cols * tileSize) / 2;
 
-  const gridChanged = (finalCols !== grid.cols || finalRows !== grid.rows);
-  grid = { cols: finalCols, rows: finalRows, tileSize, width: w, height: h, yOffset: barHeight, barHeight };
+  const gridChanged = (cols !== grid.cols || rows !== grid.rows);
+  grid = { cols, rows, tileSize, width: w, height: h, yOffset: barHeight, barHeight, xOffset };
 
   if (gridChanged) regenerateWorld();
 }
