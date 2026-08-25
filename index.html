@@ -94,7 +94,7 @@
 <body>
 
 <canvas id="game"></canvas>
-<div id="loading">lädt…</div>
+<div id="loading">l…</div>
 
 <div id="controls">
   <div class="pad">
@@ -234,6 +234,17 @@ function fadeOutMusicCompletely(seconds) {
   bgGainNode.gain.cancelScheduledValues(now);
   bgGainNode.gain.setValueAtTime(bgGainNode.gain.value, now);
   bgGainNode.gain.linearRampToValueAtTime(0, now + seconds);
+}
+
+// Fadet die Hintergrundmusik zurück auf volle Lautstärke (z.B. wenn der
+// Spieler sich wieder bewegt, nachdem die Musik zuvor ausgefadet wurde).
+function fadeInMusic(seconds) {
+  if (!audioCtx || !bgGainNode) return;
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  const now = audioCtx.currentTime;
+  bgGainNode.gain.cancelScheduledValues(now);
+  bgGainNode.gain.setValueAtTime(bgGainNode.gain.value, now);
+  bgGainNode.gain.linearRampToValueAtTime(1, now + seconds);
 }
 
 // Spielt einen kurzen Sound als Oneshot ab (eigenes Audio-Element pro Aufruf,
@@ -691,6 +702,8 @@ function update(t) {
     player.moveStart = t;
     player.moving = true;
     player.lastWalkPhase = null; // sorgt dafür, dass der erste Frame sofort einen Sound auslöst
+
+    fadeInMusic(MUSIC_FADEOUT_SECONDS); // Musik wieder reinfaden, falls sie zuvor ausgefadet war
   }
 }
 
