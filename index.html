@@ -284,10 +284,17 @@ let grid = { cols: 0, rows: 0, tileSize: 0, width: 0, height: 0, yOffset: 0, bar
 /* ==========================================================
    TEXTE — hier zentral änderbar (z.B. für eine andere Sprache
    oder einen anderen Titel).
+
+   ZEILENUMBRÜCHE im Titel:
+     - Der Text wird automatisch an die Bildschirmbreite angepasst
+       (Umbruch an Leerzeichen, bei Bedarf wird die Schrift etwas
+       kleiner, damit alles in den oberen Rand passt).
+     - Mit \n erzwingst du einen Zeilenumbruch (neue Zeile).
+     - Mit \n\n erzwingst du einen Absatz (= eine Leerzeile dazwischen).
    ========================================================== */
 const UI_TEXT = {
   // Text, der zentriert im oberen Rand steht
-  title: "use directional buttons to move around. \n stand in front of the icons facing them and press a to interact with them. \n by interacting with the icons you will be able to be redirected to my socials, my accounts on streaming services etc. \n thank you for coming by :)!",
+  title: "use directional buttons to move around.\nstand in front of the icons facing them and press a to interact with them.\nby interacting with the icons you will be able to be redirected to my socials, my accounts on streaming services etc.\n\nthank you for coming by :)!",
   // Hinweistext im Dialogfenster, erscheint bei jedem Icon gleich
   interactHint: "A: open   B: close",
 };
@@ -297,6 +304,14 @@ const UI_TEXT = {
 // z.B. auch "#f5c400" oder "rgb(20,20,20)".
 const BAR_COLOR = "#000000";
 const BAR_TEXT_COLOR = "#ffffff";
+
+// Schriftgröße des Titels im oberen Rand: startet bei TITLE_FONT_MAX und wird
+// bei Platzmangel schrittweise bis TITLE_FONT_MIN verkleinert.
+const TITLE_FONT_MAX = 10;
+const TITLE_FONT_MIN = 5;
+const TITLE_LINE_HEIGHT_FACTOR = 1.6; // Zeilenhöhe relativ zur Schriftgröße
+const TITLE_PADDING_X = 12;           // Mindestabstand zum linken/rechten Bildschirmrand
+const TITLE_PADDING_Y = 6;            // Mindestabstand zum oberen/unteren Rand der Leiste
 
 // Ladeseite (der #loading-Bildschirm, der bis zum vollständigen Laden aller
 // Assets sichtbar ist) — genauso frei änderbar wie Text/Farben des Rands.
@@ -730,6 +745,36 @@ function wrapText(context, text, maxWidth) {
   return lines;
 }
 
+// Wie wrapText, aber mit Unterstützung für absichtliche Zeilenumbrüche:
+// jedes "\n" im Text beginnt eine neue Zeile, "\n\n" ergibt eine Leerzeile
+// (Absatz). Jeder Abschnitt wird zusätzlich automatisch an maxWidth
+// umgebrochen. Überlange einzelne Wörter werden zeichenweise getrennt,
+// damit nie etwas über den Bildschirmrand ragt.
+function wrapParagraphs(context, text, maxWidth) {
+  const result = [];
+  const paragraphs = String(text).split('\n');
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) { result.push(''); continue; } // Leerzeile
+    const lines = wrapText(context, trimmed, maxWidth);
+    for (const line of lines) {
+      if (context.measureText(line).width <= maxWidth) { result.push(line); continue; }
+      // Einzelnes Wort ist breiter als die Zeile -> hart trennen
+      let chunk = '';
+      for (const ch of line) {
+        if (context.measureText(chunk + ch).width > maxWidth && chunk) {
+          result.push(chunk);
+          chunk = ch;
+        } else {
+          chunk += ch;
+        }
+      }
+      if (chunk) result.push(chunk);
+    }
+  }
+  return result;
+}
+
 function drawBackground() {
   for (let r = 0; r < grid.rows; r++) {
     for (let c = 0; c < grid.cols; c++) {
@@ -806,13 +851,47 @@ function drawPlayer(t) {
   else drawFallback(FALLBACK_PLAYER, x + grid.tileSize / 2, y + grid.tileSize / 2, grid.tileSize);
 }
 
-// Zentrierter Titel im oberen Rand
+// Zentrierter Titel im oberen Rand — automatisch umgebrochen (an Leerzeichen
+// und an \n aus UI_TEXT.title) und bei Platzmangel schrittweise verkleinert,
+// sodass er auf jedem Gerät sowohl in die Breite als auch in die Höhe des
+// oberen Rands passt.
+let titleLayoutCache = { key: "", fontSize: TITLE_FONT_MAX, lines: [] };
+
+function layoutTitle() {
+  const maxW = Math.max(40, grid.width - TITLE_PADDING_X * 2);
+  const maxH = Math.max(10, grid.barHeight - TITLE_PADDING_Y * 2);
+  const key = `${UI_TEXT.title}|${Math.round(maxW)}|${Math.round(maxH)}`;
+  if (titleLayoutCache.key === key) return titleLayoutCache;
+
+  let chosen = null;
+  for (let size = TITLE_FONT_MAX; size >= TITLE_FONT_MIN; size--) {
+    ctx.font = `${size}px 'Press Start 2P', monospace`;
+    const lines = wrapParagraphs(ctx, UI_TEXT.title, maxW);
+    const totalH = lines.length * size * TITLE_LINE_HEIGHT_FACTOR;
+    chosen = { key, fontSize: size, lines };
+    if (totalH <= maxH) break; // passt -> größte passende Schrift gefunden
+  }
+  titleLayoutCache = chosen;
+  return titleLayoutCache;
+}
+
 function drawTopBar() {
+  // Wenn die Schrift noch nicht geladen ist, würde falsch gemessen -> den
+  // Cache leeren, damit nach dem Laden der Font neu berechnet wird.
+  if (document.fonts && document.fonts.status !== "loaded") titleLayoutCache.key = "";
+
+  const layout = layoutTitle();
+  const lineH = layout.fontSize * TITLE_LINE_HEIGHT_FACTOR;
+  const totalH = layout.lines.length * lineH;
+  const startY = (grid.barHeight - totalH) / 2 + lineH / 2;
+
   ctx.fillStyle = BAR_TEXT_COLOR;
-  ctx.font = "10px 'Press Start 2P', monospace";
+  ctx.font = `${layout.fontSize}px 'Press Start 2P', monospace`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(UI_TEXT.title, grid.width / 2, grid.barHeight / 2);
+  layout.lines.forEach((line, i) => {
+    ctx.fillText(line, grid.width / 2, startY + i * lineH);
+  });
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
 }
